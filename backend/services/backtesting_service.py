@@ -1,19 +1,13 @@
 # backend/services/backtesting_service.py
 import datetime
 import json
-import ccxt
-import importlib.util
-import os
-import pandas as pd # For data handling and calculations
-import numpy as np  # For numerical operations
 import logging
 
-from backend.models import BacktestResult, Strategy as StrategyModel
-from backend.services.strategy_service import _load_strategy_class_from_db_obj
-from backend.services.exchange_service import fetch_historical_data
 from sqlalchemy.orm import Session
-from backend.celery_app import celery_app # Import celery app
-from backend.tasks import run_backtest_task # Import the Celery task
+from backend.models import BacktestResult, Strategy as StrategyModel, User # Assuming User model is needed for validation
+from backend.celery_app import celery_app 
+# Import the renamed Celery task from the correct module
+from backend.tasks.backtesting_tasks import run_backtest_celery_task 
 
 # --- Configuration ---
 MAX_BACKTEST_DAYS = 366 # Maximum backtest period allowed (e.g., 1 year)
@@ -21,213 +15,63 @@ MAX_BACKTEST_DAYS = 366 # Maximum backtest period allowed (e.g., 1 year)
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# --- Core Backtesting Logic (Helper Function) ---
-def _perform_backtest_logic(db_session: Session,
-                            backtest_result_id: int, # Added backtest_result_id
-                            user_id: int,
-                            strategy_id: int,
-                            custom_parameters: dict,
-                            symbol: str,
-                            timeframe: str,
-                            start_date_str: str,
-                            end_date_str: str,
-                            initial_capital: float = 10000.0,
-                            exchange_id: str = 'binance'
-                           ):
+# _perform_backtest_logic has been moved to backend/tasks/backtesting_tasks.py
+
+# --- Service Functions ---
+def submit_backtest_task(db_session: Session,
+                         user_id: int,
+                         strategy_id: int,
+                         custom_parameters: dict, # This should be a dict
+                         symbol: str,
+                         timeframe: str,
+                         start_date_str: str,
+                         end_date_str: str,
+                         initial_capital: float = 10000.0,
+                         exchange_id: str = 'binance'
+                        ):
     """
-    Performs the core backtesting logic. Designed to be called by a Celery task.
-    Updates the BacktestResult status in the database.
+    Submits a backtest task to be run by a Celery worker.
+    Creates a BacktestResult record with 'PENDING' status.
     """
-    backtest_record = db_session.query(BacktestResult).filter(BacktestResult.id == backtest_result_id).first()
-    if not backtest_record:
-        logger.error(f"BacktestResult record with ID {backtest_result_id} not found.")
-        # Cannot update status if record is not found
-        return {"status": "error", "message": f"BacktestResult record with ID {backtest_result_id} not found."}
+    # Validate user
+    user = db_session.query(User).filter(User.id == user_id).first()
+    if not user:
+        return {"status": "error", "message": "User not found."}
 
-    try:
-        # Update status to running
-        backtest_record.status = "running"
-        db_session.commit()
-
-        start_date = datetime.datetime.fromisoformat(start_date_str)
-        end_date = datetime.datetime.fromisoformat(end_date_str)
-    except ValueError:
-        logger.error(f"Invalid date format for backtest: {start_date_str} to {end_date_str}")
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": "Invalid date format."}
-
-    if (end_date - start_date).days > MAX_BACKTEST_DAYS:
-        logger.error(f"Backtest period exceeds max allowed days ({MAX_BACKTEST_DAYS}): {start_date_str} to {end_date_str}")
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": f"Backtest period cannot exceed {MAX_BACKTEST_DAYS} days."}
-    if start_date >= end_date:
-        logger.error(f"Start date is not before end date: {start_date_str} to {end_date_str}")
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": "Start date must be before end date."}
-
-    # 1. Load Strategy Class
-    strategy_db_obj = db_session.query(StrategyModel).filter(StrategyModel.id == strategy_id, StrategyModel.is_active == True).first()
-    if not strategy_db_obj:
-        logger.error(f"Strategy with ID '{strategy_id}' not found or is not active for backtest.")
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": f"Strategy with ID '{strategy_id}' not found or is not active."}
-
-    StrategyClass = _load_strategy_class_from_db_obj(strategy_db_obj)
-    if not StrategyClass:
-        logger.error(f"Could not load strategy class for {strategy_db_obj.name} (ID: {strategy_id}).")
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": f"Could not load strategy class for {strategy_db_obj.name}."}
-
-    # Update strategy name in the record
-    backtest_record.strategy_name_used = strategy_db_obj.name
-    db_session.commit()
+    # Validate strategy
+    strategy = db_session.query(StrategyModel).filter(StrategyModel.id == strategy_id).first()
+    if not strategy:
+        return {"status": "error", "message": f"Strategy with ID {strategy_id} not found."}
+    if not strategy.is_active:
+        return {"status": "error", "message": f"Strategy '{strategy.name}' is not active."}
 
 
-    # 2. Fetch Historical Data
-    try:
-        historical_df = fetch_historical_data(exchange_id, symbol, timeframe, start_date, end_date)
-        if historical_df.empty:
-            logger.warning(f"No historical data found for {symbol}@{timeframe} from {start_date_str} to {end_date_str} on {exchange_id}.")
-            backtest_record.status = "no_data" # Use 'no_data' status
-            db_session.commit()
-            return {"status": "error", "message": "No historical data found for the given parameters."}
-    except Exception as e:
-        logger.error(f"Failed to fetch historical data for backtest: {e}", exc_info=True)
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": f"Failed to fetch historical data: {str(e)}"}
-
-    # 3. Instantiate Strategy
-    strategy_params = {
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "capital": initial_capital,
-        **custom_parameters
-    }
-    try:
-        strategy_instance = StrategyClass(**strategy_params)
-    except Exception as e:
-        logger.error(f"Error initializing strategy '{strategy_db_obj.name}' (ID: {strategy_id}) for backtest: {e}", exc_info=True)
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": f"Error initializing strategy: {str(e)}"}
-
-    # 4. Run the strategy's backtest method
-    try:
-        backtest_output = strategy_instance.run_backtest(historical_df)
-    except Exception as e:
-        logger.error(f"Error during strategy's run_backtest method for '{strategy_db_obj.name}' (ID: {strategy_id}): {e}", exc_info=True)
-        backtest_record.status = "failed"
-        db_session.commit()
-        return {"status": "error", "message": f"Error executing strategy backtest: {str(e)}"}
-
-    # 5. Process results from the strategy's output
-    pnl = backtest_output.get("pnl", 0.0)
-    trades_log = backtest_output.get("trades", [])
-    sharpe_ratio = backtest_output.get("sharpe_ratio", 0.0)
-    max_drawdown = backtest_output.get("max_drawdown", 0.0)
-    total_trades = len(trades_log)
-    winning_trades = sum(1 for t in trades_log if t.get("pnl", 0) > 0)
-    losing_trades = total_trades - winning_trades
-
-    # Generate equity curve
-    equity_curve = []
-    if not historical_df.empty:
-        equity_timestamps = historical_df.index.astype(np.int64) // 10**6 # Milliseconds
-
-        pnl_at_time = {}
-        cumulative_pnl = 0
-        sorted_trades_for_equity = sorted(trades_log, key=lambda t: t.get('exit_time', t.get('entry_time', 0)))
-
-        for trade in sorted_trades_for_equity:
-            trade_pnl = trade.get("pnl", 0)
-            cumulative_pnl += trade_pnl
-            time_key = trade.get('exit_time', trade.get('entry_time'))
-            if time_key:
-                 pnl_at_time[int(time_key * 1000 if isinstance(time_key, (int, float)) and time_key < 1e12 else time_key)] = cumulative_pnl
-
-        last_recorded_pnl = 0
-        for ts_millis in equity_timestamps:
-            relevant_pnl_times = [t for t in pnl_at_time.keys() if t <= ts_millis]
-            if relevant_pnl_times:
-                last_recorded_pnl = pnl_at_time[max(relevant_pnl_times)]
-
-            equity_curve.append([ts_millis, round(initial_capital + last_recorded_pnl, 2)])
-
-        if not trades_log and not historical_df.empty:
-            equity_curve = [[ts_millis, round(initial_capital, 2)] for ts_millis in equity_timestamps]
-
-    # 6. Update results in the existing record
-    backtest_record.pnl = pnl
-    backtest_record.sharpe_ratio = sharpe_ratio
-    backtest_record.max_drawdown = max_drawdown
-    backtest_record.total_trades = total_trades
-    backtest_record.winning_trades = winning_trades
-    backtest_record.losing_trades = losing_trades
-    backtest_record.trades_log_json = json.dumps(trades_log)
-    backtest_record.equity_curve_json = json.dumps(equity_curve)
-    backtest_record.status = "completed" # Set status to completed
-    backtest_record.updated_at = datetime.datetime.utcnow() # Update timestamp
-
-    try:
-        db_session.commit()
-        logger.info(f"Backtest result updated for ID: {backtest_record.id} for user {user_id}, strategy {strategy_id}.")
-        return {
-            "status": "success",
-            "message": "Backtest completed and results stored.",
-            "backtest_id": backtest_record.id,
-            # Include other summary data if needed by the task result
-        }
-    except Exception as e:
-        db_session.rollback()
-        logger.error(f"Error updating backtest results for ID {backtest_record.id}: {e}", exc_info=True)
-        backtest_record.status = "failed" # Set status to failed on error
-        db_session.commit()
-        return {"status": "error", "message": "Database error updating backtest results."}
-
-# --- Service Function to Queue Backtest ---
-def run_backtest(db_session: Session, # Use DB session directly
-                 user_id: int,
-                 strategy_id: int,
-                 custom_parameters: dict,
-                 symbol: str,
-                 timeframe: str,
-                 start_date_str: str,
-                 end_date_str: str,
-                 initial_capital: float = 10000.0,
-                 exchange_id: str = 'binance'
-                ):
-    """
-    Queues a backtest task to be run by a Celery worker.
-    Creates a BacktestResult record with 'queued' status.
-    """
-    # Basic validation before queuing
+    # Basic date validation before queuing
     try:
         start_date = datetime.datetime.fromisoformat(start_date_str)
         end_date = datetime.datetime.fromisoformat(end_date_str)
     except ValueError:
         return {"status": "error", "message": "Invalid date format. Use ISO format (YYYY-MM-DDTHH:MM:SS)."}
 
-    if (end_date - start_date).days > MAX_BACKTEST_DAYS:
+    if (end_date - start_date).days > MAX_BACKTEST_DAYS: # Using MAX_BACKTEST_DAYS from service config
         return {"status": "error", "message": f"Backtest period cannot exceed {MAX_BACKTEST_DAYS} days."}
     if start_date >= end_date:
         return {"status": "error", "message": "Start date must be before end date."}
 
-    # Create a BacktestResult record in the DB with status 'queued'
+    # Create a BacktestResult record in the DB with status 'PENDING'
+    # Ensure custom_parameters is stored as a JSON string
+    custom_parameters_json = json.dumps(custom_parameters) if isinstance(custom_parameters, dict) else custom_parameters
+    
     backtest_record = BacktestResult(
         user_id=user_id,
-        strategy_name_used=str(strategy_id), # Placeholder, will be updated by task
-        custom_parameters_json=json.dumps(custom_parameters),
+        strategy_name_used=strategy.name, # Use actual strategy name
+        # strategy_code_snapshot might be populated later if needed
+        custom_parameters_json=custom_parameters_json,
         start_date=start_date,
         end_date=end_date,
         timeframe=timeframe,
         symbol=symbol,
-        status="queued"
+        status="PENDING" # Initial status
     )
     db_session.add(backtest_record)
     db_session.commit()
@@ -235,41 +79,128 @@ def run_backtest(db_session: Session, # Use DB session directly
 
     try:
         # Send the task to the Celery queue
-        task = run_backtest_task.delay(
-            backtest_result_id=backtest_record.id, # Pass the new record ID to the task
-            user_id=user_id,
-            strategy_id=strategy_id,
-            custom_parameters=custom_parameters,
-            symbol=symbol,
-            timeframe=timeframe,
-            start_date_str=start_date_str,
-            end_date_str=end_date_str,
-            initial_capital=initial_capital,
-            exchange_id=exchange_id
-        )
-        logger.info(f"Queued backtest task for user {user_id}, strategy {strategy_id}. Task ID: {task.id}")
+        # Parameters match the run_backtest_celery_task signature
+        task_args = {
+            "backtest_result_id": backtest_record.id,
+            "user_id": user_id,
+            "strategy_id": strategy_id, # Pass strategy_id for the task to load StrategyModel
+            "custom_parameters_json": custom_parameters_json,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start_date_str": start_date_str,
+            "end_date_str": end_date_str,
+            "initial_capital": initial_capital,
+            "exchange_id": exchange_id
+        }
+        task = run_backtest_celery_task.delay(**task_args)
+        
+        logger.info(f"Queued backtest task for user {user_id}, strategy {strategy_id}. Record ID: {backtest_record.id}, Celery Task ID: {task.id}")
 
-        # Update the BacktestResult record with the task ID
+        # Update the BacktestResult record with the Celery task ID
         backtest_record.celery_task_id = task.id
         db_session.commit()
 
         return {"status": "success", "message": "Backtest task queued.", "backtest_id": backtest_record.id, "task_id": task.id}
 
     except Exception as e:
-        db_session.rollback() # Rollback the initial record creation if task queuing fails
-        logger.error(f"Failed to queue backtest task for user {user_id}, strategy {strategy_id}: {e}", exc_info=True)
-        # Update the BacktestResult record status to 'failed_to_queue'
-        backtest_record.status = "failed_to_queue"
+        # If task queuing fails, mark the record as FAILED_TO_QUEUE
+        logger.error(f"Failed to queue backtest task for user {user_id}, strategy {strategy_id}, record {backtest_record.id}: {e}", exc_info=True)
+        backtest_record.status = "FAILED_TO_QUEUE" # More specific status
+        backtest_record.results_json = json.dumps({"error": f"Failed to queue Celery task: {str(e)}"})
         db_session.commit()
         return {"status": "error", "message": f"Failed to queue backtest task: {e}"}
 
-# Note: The _load_strategy_class helper function is assumed to be defined elsewhere or needs to be added.
-# Based on live_trading_service, it seems _load_strategy_class_from_db_obj is the correct function to use.
-# Let's ensure that's used consistently.
+def get_backtest_status(db_session: Session, backtest_id: int, user_id: int):
+    """
+    Retrieves the status of a specific backtest for a user.
+    """
+    backtest_record = db_session.query(BacktestResult).filter(
+        BacktestResult.id == backtest_id,
+        BacktestResult.user_id == user_id # Ensure user owns this backtest
+    ).first()
 
-# Correcting the internal strategy loading function call
-# The original code had `_load_strategy_class`, but the import is `_load_strategy_class_from_db_obj`.
-# I will use `_load_strategy_class_from_db_obj`.
+    if not backtest_record:
+        return {"status": "error", "message": "Backtest not found or access denied."}
+    
+    return {
+        "status": "success",
+        "backtest_id": backtest_record.id,
+        "current_status": backtest_record.status,
+        "strategy_name": backtest_record.strategy_name_used,
+        "symbol": backtest_record.symbol,
+        "timeframe": backtest_record.timeframe,
+        "celery_task_id": backtest_record.celery_task_id,
+        "created_at": backtest_record.created_at.isoformat(),
+        "updated_at": backtest_record.updated_at.isoformat(),
+        "completed_at": backtest_record.completed_at.isoformat() if backtest_record.completed_at else None,
+    }
 
-# TODO: Implement a secure secrets management solution for API_ENCRYPTION_KEY in production.
-# This key is critical for decrypting API keys for live trading.
+def get_backtest_results(db_session: Session, backtest_id: int, user_id: int):
+    """
+    Retrieves the full results of a completed backtest for a user.
+    """
+    backtest_record = db_session.query(BacktestResult).filter(
+        BacktestResult.id == backtest_id,
+        BacktestResult.user_id == user_id
+    ).first()
+
+    if not backtest_record:
+        return {"status": "error", "message": "Backtest not found or access denied."}
+    
+    if backtest_record.status != "COMPLETED":
+        return {
+            "status": "info", 
+            "message": f"Backtest is not yet completed. Current status: {backtest_record.status}",
+            "backtest_id": backtest_record.id,
+            "current_status": backtest_record.status
+        }
+        
+    results = None
+    try:
+        results = json.loads(backtest_record.results_json) if backtest_record.results_json else {}
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding results_json for backtest ID {backtest_id}: {backtest_record.results_json}")
+        return {"status": "error", "message": "Error decoding results from storage."}
+
+    return {
+        "status": "success",
+        "backtest_id": backtest_record.id,
+        "strategy_name": backtest_record.strategy_name_used,
+        "symbol": backtest_record.symbol,
+        "timeframe": backtest_record.timeframe,
+        "start_date": backtest_record.start_date.isoformat(),
+        "end_date": backtest_record.end_date.isoformat(),
+        "status": backtest_record.status,
+        "results": results, # Parsed JSON results
+        "created_at": backtest_record.created_at.isoformat(),
+        "completed_at": backtest_record.completed_at.isoformat() if backtest_record.completed_at else None,
+    }
+
+def list_user_backtests(db_session: Session, user_id: int, skip: int = 0, limit: int = 100):
+    """
+    Lists all backtests submitted by a user.
+    """
+    query = db_session.query(BacktestResult).filter(BacktestResult.user_id == user_id).order_by(BacktestResult.created_at.desc())
+    total_count = query.count()
+    backtests = query.offset(skip).limit(limit).all()
+
+    return {
+        "status": "success",
+        "total_count": total_count,
+        "skip": skip,
+        "limit": limit,
+        "backtests": [
+            {
+                "id": br.id,
+                "strategy_name": br.strategy_name_used,
+                "symbol": br.symbol,
+                "timeframe": br.timeframe,
+                "status": br.status,
+                "created_at": br.created_at.isoformat(),
+                "completed_at": br.completed_at.isoformat() if br.completed_at else None,
+            } for br in backtests
+        ]
+    }
+
+# TODO: Add service functions to cancel a PENDING or RUNNING backtest (revoke Celery task and update status).
+# TODO: Add service functions for admin to view/manage all backtests.

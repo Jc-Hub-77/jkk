@@ -7,7 +7,7 @@ import datetime
 import logging # Add logging import
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.orm import Session
-from backend.models import ApiKey, User # Adjusted import path
+from backend.models import ApiKey, User, UserStrategySubscription # Adjusted import path
 from backend.config import settings # Import global settings
 
 # Initialize logger
@@ -240,11 +240,38 @@ def get_exchange_client(db_session: Session, api_key_id: int, user_id: int) -> O
     
     return exchange_class(config)
 
+def get_encrypted_api_key_data(db_session: Session, api_key_id: int, user_id: int) -> Optional[dict]:
+    """
+    Retrieves encrypted API key data for a given API key ID and user ID.
+    """
+    key_entry = db_session.query(ApiKey).filter(ApiKey.id == api_key_id, ApiKey.user_id == user_id).first()
+    if not key_entry:
+        logger.warning(f"Encrypted API key data not found for API key ID {api_key_id}, user ID {user_id}.")
+        return None
+
+    # Ensure that we have the necessary encrypted fields.
+    if not key_entry.encrypted_api_key or not key_entry.encrypted_secret_key:
+        logger.error(f"API key ID {api_key_id} for user {user_id} is missing encrypted key/secret.")
+        return None # Or raise an error, depending on desired handling
+
+    return {
+        "api_key": key_entry.encrypted_api_key,
+        "secret_key": key_entry.encrypted_secret_key,
+        "passphrase": key_entry.encrypted_passphrase, # This can be None
+        "exchange_id": key_entry.exchange_name.lower(),
+        "label": key_entry.label # For logging/reference
+    }
+
 def fetch_historical_data(exchange_id: str, symbol: str, timeframe: str, start_date: datetime.datetime, end_date: datetime.datetime):
     """
     Fetches historical OHLCV data for a given symbol and timeframe from an exchange.
     Returns data as a pandas DataFrame.
     """
+    # This function seems to be missing pandas (pd) and time imports if used standalone.
+    # For now, assuming they are available in the broader context or will be added if this function is called.
+    import pandas as pd # Added import
+    import time # Added import
+
     exchange_id_lower = exchange_id.lower()
     if exchange_id_lower not in SUPPORTED_EXCHANGES:
         logger.error(f"Exchange '{exchange_id}' is not supported for historical data fetching.")

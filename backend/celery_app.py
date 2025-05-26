@@ -1,29 +1,13 @@
 from celery import Celery
-import os
 
-# Configure Celery
-# Using Redis as the broker and result backend
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+# Create a Celery application instance
+app = Celery("backend_app")
 
-celery_app = Celery(
-    "trading_platform",
-    broker=REDIS_URL,
-    backend=REDIS_URL
-)
+# Load Celery configuration from celery_config.py
+app.config_from_object("backend.celery_config")
 
-# Optional configuration, see the Celery user guide for more details.
-celery_app.conf.update(
-    task_ignore_result=False,
-    task_track_started=True,
-    task_serializer='json',
-    result_serializer='json',
-    accept_content=['json'],
-    timezone='UTC',
-    enable_utc=True,
-)
+# Auto-discover tasks from all installed apps (assuming tasks are defined in files like tasks.py)
+app.autodiscover_tasks(["backend.tasks", "backend.tasks.live_trading_tasks", "backend.tasks.backtesting_tasks"])
 
-# Auto-discover tasks in the 'tasks' module (we will create this later)
-# celery_app.autodiscover_tasks(['backend.tasks'])
-
-if __name__ == '__main__':
-    celery_app.start()
+if __name__ == "__main__":
+    app.start()
