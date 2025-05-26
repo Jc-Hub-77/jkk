@@ -1,0 +1,3 @@
+Continue the modification from step 7 of the plan file.
+
+The ema crossover file is already doing step 7 correctly so check how it does it and apply to the rest of the strategies
