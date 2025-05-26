@@ -36,32 +36,32 @@ This diagram illustrates the robust architecture where the Web Server handles AP
     *   Define your live trading strategy execution and backtesting as "tasks" that can be sent to the task queue.
 
 2.  **Adapt Live Trading Service for Task Queue:**
-    *   Modify [`backend/services/live_trading_service.py`](C:\Users\abc\Desktop\trading_platform\backend\services\live_trading_service.py) so that instead of starting strategies in local threads, it sends a message to the task queue to start a "strategy runner" task for a specific user subscription.
+    *   Modify [`backend/services/live_trading_service.py`](backend\services\live_trading_service.py) so that instead of starting strategies in local threads, it sends a message to the task queue to start a "strategy runner" task for a specific user subscription.
     *   The `LiveStrategyRunner` logic will be adapted to run within a task queue worker process.
 
 3.  **Adapt Backtesting Service for Task Queue:**
-    *   Modify [`backend/services/backtesting_service.py`](C:\Users\abc\Desktop\trading_platform\backend\services\backtesting_service.py) so that when a user requests a backtest, the backend sends a "run backtest" task to the task queue.
+    *   Modify [`backend/services/backtesting_service.py`](backend\services\backtesting_service.py) so that when a user requests a backtest, the backend sends a "run backtest" task to the task queue.
     *   The backtesting logic will then be executed by a task queue worker.
 
 4.  **Implement Robust Order and Position Tracking:**
-    *   This is crucial when strategies run in separate worker processes. Implement a system (likely involving new database models for `Order` and `Position` in [`backend/models.py`](C:\Users\abc\Desktop\trading_platform\backend\models.py)) to track the state of live trades initiated by strategies.
+    *   This is crucial when strategies run in separate worker processes. Implement a system (likely involving new database models for `Order` and `Position` in [`backend/models.py`](backend\models.py)) to track the state of live trades initiated by strategies.
     *   Strategies running in workers will record their actions (orders placed, fills received, positions updated) in the database.
     *   The web backend will query this database to show users the status of their live trades and positions.
 
 5.  **Set Up Database Migrations:**
-    *   Ensure Alembic is configured (via [`backend/alembic.ini`](C:\Users\abc\Desktop\trading_platform\backend\alembic.ini) and scripts in [`backend/alembic/`](C:\Users\abc\Desktop\trading_platform\backend\alembic/)) and create initial migration scripts, including any new tables needed for order/position tracking.
+    *   Ensure Alembic is configured (via [`backend/alembic.ini`](backend\alembic.ini) and scripts in [`backend/alembic/`](backend\alembic/)) and create initial migration scripts, including any new tables needed for order/position tracking.
 
 **Phase 2: Complete Backend Services & Strategy Integration**
 
 6.  **Complete Core Backend Services:**
-    *   Go through all service files in the [`backend/services/`](C:\Users\abc\Desktop\trading_platform\backend\services/) directory (`admin_service.py`, `exchange_service.py`, `payment_service.py`, `referral_service.py`, `strategy_service.py`, `user_service.py`).
+    *   Go through all service files in the [`backend/services/`](backend\services/) directory (`admin_service.py`, `exchange_service.py`, `payment_service.py`, `referral_service.py`, `strategy_service.py`, `user_service.py`).
     *   Implement the full business logic, ensuring services correctly interact with the database and external APIs.
     *   Services that trigger background work (like deploying a strategy or running a backtest) will now interact with the task queue.
     *   Implement comprehensive error handling and logging, ensuring logs from different components (web server, workers) can be collected.
 
 7.  **Refine Strategy Logic for Task Queue Execution:**
 
-    *   Adapt the strategy classes in the [`strategies/`](C:\Users\abc\Desktop\trading_platform\strategies/) directory (`*.py`) to be suitable for execution within a task queue worker environment. This might involve changes to how they manage state (potentially storing more state in the database) and how they interact with external resources like the exchange (using the provided `exchange_ccxt` instance).
+    *   Adapt the strategy classes in the [`strategies/`](strategies/) directory (`*.py`) to be suitable for execution within a task queue worker environment. This might involve changes to how they manage state (potentially storing more state in the database) and how they interact with external resources like the exchange (using the provided `exchange_ccxt` instance).
     *   Ensure the `execute_live_signal` method is robust and handles potential interruptions or restarts gracefully (e.g., by checking current position/orders on startup).
 
 8.  **Implement Secure Secrets Management:**
@@ -72,13 +72,13 @@ This diagram illustrates the robust architecture where the Web Server handles AP
 
 9.  **Connect Frontend to Web Backend APIs:**
 
-    *   Update the JavaScript files in [`frontend/js/`](C:\Users\abc\Desktop\trading_platform\frontend\js/) and [`frontend/admin/js/`](C:\Users\abc\Desktop\trading_platform\frontend\admin\js/).
+    *   Update the JavaScript files in [`frontend/js/`](frontend\js/) and [`frontend/admin/js/`](frontend\admin\js/).
     *   Replace conceptual API calls and simulated data with actual `fetch` or equivalent HTTP requests to the completed web backend endpoints under `/api/v1/...`.
     *   Ensure that data received from the backend APIs is correctly parsed and displayed in the corresponding frontend UI elements (including live trading status and history from the new tracking system).
 
 10. **Complete Admin Panel Functionality:**
 
-    *   Ensure all admin-related backend endpoints defined in [`backend/api/v1/admin_router.py`](C:\Users\abc\Desktop\trading_platform\backend\api\v1\admin_router.py) and their corresponding service functions in [`backend/services/admin_service.py`](C:\Users\abc\Desktop\trading_platform\backend\services\admin_service.py) are fully implemented.
+    *   Ensure all admin-related backend endpoints defined in [`backend/api/v1/admin_router.py`](backend\api\v1\admin_router.py) and their corresponding service functions in [`backend/services/admin_service.py`](backend\services\admin_service.py) are fully implemented.
     *   Connect the admin frontend pages (`frontend/admin/*.html`) to these completed admin backend APIs using JavaScript, enabling full administrative control over users, strategies, payments, etc.
 
 **Phase 4: Deployment & Production Setup**
