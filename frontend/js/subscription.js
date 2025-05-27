@@ -7,90 +7,80 @@ document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
     const userId = localStorage.getItem('userId');
 
-    // if (!authToken || !userId) { /* Redirect */ }
+    if (!authToken || !userId) {
+        console.warn("User not authenticated. Redirecting to login from subscription.js");
+        window.location.href = 'login.html'; // Adjust path if needed
+        return;
+    }
 
     const activeStrategySubsList = document.getElementById('activeStrategySubscriptionsList');
     const platformPlanName = document.getElementById('platformPlanName');
     const platformPlanStatus = document.getElementById('platformPlanStatus');
     const platformPlanExpiry = document.getElementById('platformPlanExpiry');
     const renewPlatformSubBtn = document.getElementById('renewPlatformSubBtn');
-    const paymentSection = document.getElementById('paymentSection'); // This section might be re-purposed or removed for redirect flow
+    const paymentSection = document.getElementById('paymentSection'); 
     const paymentHistoryTableBody = document.getElementById('paymentHistoryTableBody');
-
-    // Elements from the paymentSection that might be less used with Coinbase redirect flow
-    // const paymentSectionTitle = document.getElementById('paymentSectionTitle');
-    // const paymentItemName = document.getElementById('paymentItemName');
-    // const paymentAmountCrypto = document.getElementById('paymentAmountCrypto');
-    // const paymentCurrency = document.getElementById('paymentCurrency');
-    // const paymentAddress = document.getElementById('paymentAddress');
-    // const paymentExpiryTime = document.getElementById('paymentExpiryTime');
-    // const paymentGatewayChargeId = document.getElementById('paymentGatewayChargeId');
-    // const paymentMadeBtn = document.getElementById('paymentMadeBtn');
-    // const cancelPaymentBtn = document.getElementById('cancelPaymentBtn');
-
 
     async function initializeSubscriptionPage() {
         await fetchActiveStrategySubscriptions();
-        await fetchPlatformSubscriptionDetails(); // Assuming a general platform sub exists
+        await fetchPlatformSubscriptionDetails(); 
         await fetchPaymentHistory();
 
-        if(renewPlatformSubBtn) renewPlatformSubBtn.addEventListener('click', handleRenewPlatformSubscription);
-        // Event listeners for strategy renewal buttons are added dynamically in fetchActiveStrategySubscriptions
+        if(renewPlatformSubBtn) renewPlatformSubBtn.addEventListener('click', handleGenericRenewInitiation);
         
-        // Hide the direct payment details section initially, as Coinbase uses redirects
         if(paymentSection) paymentSection.style.display = 'none'; 
     }
 
     async function fetchActiveStrategySubscriptions() {
         if (!activeStrategySubsList) return;
-        activeStrategySubsList.innerHTML = '<p>Loading...</p>';
+        activeStrategySubsList.innerHTML = '<p>Loading your strategy subscriptions...</p>';
         try {
-            // Conceptual API: GET /api/users/{userId}/strategy_subscriptions
-            // const response = await fetch(`${BACKEND_API_BASE_URL}/api/users/${userId}/strategy_subscriptions`, { headers: { 'Authorization': `Bearer ${authToken}` } });
-            // if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            // const data = await response.json(); // Expects { status: "success", subscriptions: [...] }
-            
-            await new Promise(resolve => setTimeout(resolve, 300));
-            const data = { // Matches backend list_user_subscriptions format
-                status: "success",
-                subscriptions: [
-                    { subscription_id: "sub_ema123", strategy_name: "EMA Crossover (BTC/USDT)", api_key_id: "key_sim_1", is_active: true, expires_at: new Date(Date.now() + 15*24*60*60*1000).toISOString(), time_remaining_seconds: 15*24*60*60, custom_parameters: {short_ema:10} },
-                    { subscription_id: "sub_rsi456", strategy_name: "RSI Divergence (ETH/USDT)", api_key_id: "key_sim_2", is_active: false, expires_at: new Date(Date.now() - 5*24*60*60*1000).toISOString(), time_remaining_seconds: 0, custom_parameters: {rsi_period:14} }
-                ]
-            };
-
-            activeStrategySubsList.innerHTML = '';
-            if (!data.subscriptions || data.subscriptions.length === 0) {
-                activeStrategySubsList.innerHTML = '<p>No active strategy subscriptions found.</p>'; return;
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/subscriptions/me`, { 
+                headers: { 'Authorization': `Bearer ${authToken}` } 
+            });
+            if (!response.ok) {
+                if (response.status === 401) { window.location.href = 'login.html'; return; }
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
-            data.subscriptions.forEach(sub => {
-                const itemDiv = document.createElement('div');
-                itemDiv.className = 'subscription-item card mb-2'; // Added card styling
-                const isActive = sub.is_active; // Backend now calculates this based on expiry
-                const statusClass = isActive ? 'status-active' : 'status-expired';
-                const timeRemaining = isActive ? formatTimeRemaining(sub.time_remaining_seconds) : 'Expired';
+            const data = await response.json(); // Expects { status: "success", subscriptions: [...] }
+            
+            activeStrategySubsList.innerHTML = '';
+            if (data.status === "success" && data.subscriptions && data.subscriptions.length > 0) {
+                data.subscriptions.forEach(sub => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'subscription-item card mb-2'; 
+                    const isActive = sub.is_active; 
+                    const statusClass = isActive ? 'status-active' : 'status-expired';
+                    const timeRemaining = isActive ? formatTimeRemaining(sub.time_remaining_seconds) : 'Expired';
+                    const statusMessageText = sub.status_message || (isActive ? 'Running' : 'Inactive/Expired');
 
-                itemDiv.innerHTML = `
-                    <h4>${sub.strategy_name}</h4>
-                    <div class="subscription-details">
-                        <p><strong>Status:</strong> <span class="${statusClass}">${isActive ? 'Active' : 'Expired'}</span></p>
-                        <p><strong>Expires:</strong> ${new Date(sub.expires_at).toLocaleString()} (${timeRemaining})</p>
-                        <p><small>Subscription ID: ${sub.subscription_id} | API Key ID: ${sub.api_key_id}</small></p>
-                    </div>
-                    <button class="btn btn-sm renew-strategy-sub-btn mt-1" 
-                            data-sub-id="${sub.subscription_id}" 
-                            data-item-name="${sub.strategy_name}"
-                            data-item-type="renew_strategy_subscription"
-                            data-item-description="1 Month Renewal for ${sub.strategy_name}"
-                            data-amount-usd="10.00"> <!-- Assuming fixed renewal price -->
-                        Renew ($10.00)
-                    </button>
-                `;
-                activeStrategySubsList.appendChild(itemDiv);
-            });
-            document.querySelectorAll('.renew-strategy-sub-btn').forEach(button => {
-                button.addEventListener('click', handleGenericRenewInitiation);
-            });
+                    itemDiv.innerHTML = `
+                        <h4>${sub.strategy_name}</h4>
+                        <div class="subscription-details">
+                            <p><strong>Status:</strong> <span class="${statusClass}">${statusMessageText}</span></p>
+                            <p><strong>Expires:</strong> ${new Date(sub.expires_at).toLocaleString()} (${timeRemaining})</p>
+                            <p><small>Subscription ID: ${sub.subscription_id} | API Key ID: ${sub.api_key_id}</small></p>
+                            <p><small>Celery Task ID: ${sub.celery_task_id || 'N/A'}</small></p>
+                        </div>
+                        <button class="btn btn-sm renew-strategy-sub-btn mt-1" 
+                                data-sub-id="${sub.subscription_id}" 
+                                data-item-name="${sub.strategy_name} Renewal"
+                                data-item-type="renew_strategy_subscription"
+                                data-item-description="1 Month Renewal for ${sub.strategy_name}"
+                                data-amount-usd="10.00" 
+                                data-subscription-months="1"> 
+                            Renew ($10.00)
+                        </button>
+                    `; // Added data-subscription-months
+                    activeStrategySubsList.appendChild(itemDiv);
+                });
+                document.querySelectorAll('.renew-strategy-sub-btn').forEach(button => {
+                    button.addEventListener('click', handleGenericRenewInitiation);
+                });
+            } else {
+                activeStrategySubsList.innerHTML = '<p>No active strategy subscriptions found.</p>';
+                if (data.status !== "success") throw new Error(data.message || "Failed to parse subscriptions.");
+            }
         } catch (error) {
             console.error("Error loading strategy subscriptions:", error);
             activeStrategySubsList.innerHTML = `<p class="error-message">Error: ${error.message}</p>`;
@@ -98,62 +88,80 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function fetchPlatformSubscriptionDetails() {
-        // Conceptual API: GET /api/users/{userId}/platform_subscription
+        if (!platformPlanName && !platformPlanStatus && !platformPlanExpiry) return;
         try {
-            // const response = await fetch(`${BACKEND_API_BASE_URL}/api/users/${userId}/platform_subscription`, { headers: { /* Auth */ } });
-            // const data = await response.json();
-            await new Promise(resolve => setTimeout(resolve, 200));
-            const data = {
-                status: "success",
-                subscription: { plan_name: "Premium Annual", is_active: true, expires_at: new Date(Date.now() + 90*24*60*60*1000).toISOString() }
-            };
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/platform_subscription`, { 
+                headers: { 'Authorization': `Bearer ${authToken}` } 
+            });
+            if (!response.ok) {
+                if (response.status === 401) { window.location.href = 'login.html'; return; }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
 
             if (data.status === "success" && data.subscription) {
                 const sub = data.subscription;
-                if(platformPlanName) platformPlanName.textContent = sub.plan_name;
-                const isActive = sub.is_active && new Date(sub.expires_at) > new Date();
+                if(platformPlanName) platformPlanName.textContent = sub.plan_name || "N/A";
+                const isActive = sub.is_active && sub.expires_at && new Date(sub.expires_at) > new Date();
                 if(platformPlanStatus) {
-                    platformPlanStatus.textContent = isActive ? 'Active' : 'Expired';
+                    platformPlanStatus.textContent = isActive ? 'Active' : 'Expired/None';
                     platformPlanStatus.className = isActive ? 'status-active' : 'status-expired';
                 }
-                if(platformPlanExpiry) platformPlanExpiry.textContent = new Date(sub.expires_at).toLocaleDateString();
+                if(platformPlanExpiry) platformPlanExpiry.textContent = sub.expires_at ? new Date(sub.expires_at).toLocaleDateString() : "N/A";
                 if(renewPlatformSubBtn) {
-                    renewPlatformSubBtn.style.display = 'inline-block';
-                    renewPlatformSubBtn.dataset.itemId = "platform_annual"; // Unique ID for this item
-                    renewPlatformSubBtn.dataset.itemName = "Platform Access (Annual)";
-                    renewPlatformSubBtn.dataset.itemType = "platform_subscription";
-                    renewPlatformSubBtn.dataset.itemDescription = "1 Year Platform Access Renewal";
-                    renewPlatformSubBtn.dataset.amountUsd = "99.00"; // Example price
+                    renewPlatformSubBtn.style.display = 'inline-block'; // Make it visible
+                    renewPlatformSubBtn.dataset.itemId = sub.plan_id || "platform_basic_annual"; // Assuming plan_id exists
+                    renewPlatformSubBtn.dataset.itemName = `${sub.plan_name || "Platform"} Renewal`;
+                    renewPlatformSubBtn.dataset.itemType = "platform_subscription_renewal"; // Specific item type
+                    renewPlatformSubBtn.dataset.itemDescription = `1 Year Renewal for ${sub.plan_name || "Platform"}`;
+                    renewPlatformSubBtn.dataset.amountUsd = "99.00"; // Example, should come from plan details
+                    renewPlatformSubBtn.dataset.subscriptionMonths = "12";
                 }
-            } else { throw new Error(data.message || "Failed to load platform subscription."); }
+            } else { 
+                if(platformPlanName) platformPlanName.textContent = "Free Tier / None";
+                if(platformPlanStatus) { platformPlanStatus.textContent = "N/A"; platformPlanStatus.className = "";}
+                if(platformPlanExpiry) platformPlanExpiry.textContent = "N/A";
+                if (data.status === "error" && data.message !== "User has no active platform subscription.") { // Don't throw error for no sub
+                    throw new Error(data.message || "Failed to load platform subscription.");
+                } else if (data.message === "User has no active platform subscription.") {
+                    console.info("User has no active platform subscription.");
+                }
+            }
         } catch (error) {
             console.error("Error loading platform subscription:", error);
-            if(platformPlanName) platformPlanName.textContent = "N/A";
+            if(platformPlanName) platformPlanName.textContent = "Error";
         }
     }
 
     async function fetchPaymentHistory() {
         if (!paymentHistoryTableBody) return;
-        paymentHistoryTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading...</td></tr>';
+        paymentHistoryTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading payment history...</td></tr>';
         try {
-            // Conceptual API: GET /api/users/{userId}/payments
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/history/me`, { headers: { 'Authorization': `Bearer ${authToken}` } });
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json(); // Expects { status:"success", payment_history: [] }
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/history/me?page=1&per_page=10`, { // Added default pagination
+                headers: { 'Authorization': `Bearer ${authToken}` } 
+            });
+            if (!response.ok) {
+                if (response.status === 401) { window.location.href = 'login.html'; return; }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json(); 
 
             paymentHistoryTableBody.innerHTML = '';
-            if (!data.payment_history || data.payment_history.length === 0) {
-                paymentHistoryTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No payment history.</td></tr>'; return;
+            if (data.status === "success" && data.payment_history && data.payment_history.length > 0) {
+                data.payment_history.forEach(p => {
+                    const row = paymentHistoryTableBody.insertRow();
+                    row.insertCell().textContent = new Date(p.date).toLocaleDateString();
+                    row.insertCell().textContent = p.description || `Sub ID: ${p.subscription_id || 'N/A'}`;
+                    // Assuming amount_crypto and crypto_currency are main fields, usd_equivalent is secondary
+                    row.insertCell().textContent = `${p.amount_crypto ? p.amount_crypto.toFixed(p.crypto_currency === "USDC" ? 2 : 8) : (p.usd_equivalent ? p.usd_equivalent.toFixed(2) : 'N/A')}`;
+                    row.insertCell().textContent = p.crypto_currency || (p.usd_equivalent ? 'USD (Equivalent)' : 'N/A');
+                    row.insertCell().innerHTML = `<span class="status-${p.status.toLowerCase()}">${p.status}</span>`;
+                    row.insertCell().textContent = p.gateway_id || p.internal_reference;
+                });
+            } else {
+                paymentHistoryTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No payment history found.</td></tr>';
+                if (data.status !== "success") throw new Error(data.message || "Failed to parse payment history.");
             }
-            data.payment_history.forEach(p => {
-                const row = paymentHistoryTableBody.insertRow();
-                row.insertCell().textContent = new Date(p.date).toLocaleDateString();
-                row.insertCell().textContent = p.description;
-                row.insertCell().textContent = p.amount.toFixed(p.currency === "USDC" ? 2 : 8);
-                row.insertCell().textContent = p.currency;
-                row.insertCell().innerHTML = `<span class="status-${p.status}">${p.status}</span>`;
-                row.insertCell().textContent = p.gateway_id;
-            });
         } catch (error) {
             console.error("Error loading payment history:", error);
             paymentHistoryTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center;">Error: ${error.message}</td></tr>`;
@@ -162,60 +170,63 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function handleGenericRenewInitiation(event) {
         const button = event.target;
-        const itemId = button.dataset.subId || button.dataset.itemId; // subId for strategy, itemId for platform
+        const itemId = button.dataset.subId || button.dataset.itemId; 
         const itemName = button.dataset.itemName;
         const itemType = button.dataset.itemType;
-        const itemDescription = button.dataset.itemDescription || itemName; // Default description to name
+        const itemDescription = button.dataset.itemDescription || itemName;
         const amountUsd = parseFloat(button.dataset.amountUsd);
         const subscriptionMonths = parseInt(button.dataset.subscriptionMonths || "1");
 
-        console.log(`Initiating payment for ${itemType} ID ${itemId}: ${itemName}, Amount: $${amountUsd}`);
+        if (!itemId || !itemName || !itemType || isNaN(amountUsd) || isNaN(subscriptionMonths)) {
+            alert("Error: Missing required information for renewal/payment.");
+            return;
+        }
         
-        // Show a loading/processing state on the button
-        button.disabled = true;
-        button.textContent = "Processing...";
+        logger.info(`Initiating payment for ${itemType} ID ${itemId}: ${itemName}, Amount: $${amountUsd}`);
+        button.disabled = true; button.textContent = "Processing...";
 
         try {
-            // Conceptual API: POST /api/payments/create_charge 
-            // (calls backend's create_coinbase_commerce_charge)
             const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/charges`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 body: JSON.stringify({ 
-                    item_id: itemId, // Use itemId from dataset
-                    item_type: itemType, // Use itemType from dataset
-                    item_name: itemName, // Use itemName from dataset
-                    item_description: itemDescription, // Use itemDescription from dataset
-                    amount_usd: amountUsd, // Use amountUsd from dataset
-                    subscription_months: subscriptionMonths, // Use subscriptionMonths from dataset
-                    // Include redirect and cancel URLs if needed by the backend
-                    redirect_url: window.location.href, // Redirect back to this page on success
-                    cancel_url: window.location.href // Redirect back to this page on cancel
-                    // Add metadata if required by backend for specific item types (e.g., api_key_id for new subscriptions)
-                    // metadata: { api_key_id: '...', custom_parameters_json: '...' } 
+                    item_id: parseInt(itemId), // Ensure item_id is int if it's a DB ID
+                    item_type: itemType, 
+                    item_name: itemName, 
+                    item_description: itemDescription, 
+                    amount_usd: amountUsd, 
+                    subscription_months: subscriptionMonths,
+                    metadata: { // Pass necessary metadata for webhook processing
+                        user_id: userId, // Already string from localStorage
+                        item_id: parseInt(itemId), // strategy_db_id or user_strategy_subscription_id
+                        item_type: itemType,
+                        subscription_months: subscriptionMonths
+                        // For new_strategy_subscription, api_key_id and custom_parameters_json would be needed here.
+                        // For renewals, backend can fetch existing sub details.
+                    }
                 })
             });
-            const chargeData = await response.json(); // Expects { status, payment_page_url, ... }
+            const chargeData = await response.json(); 
             if (!response.ok || chargeData.status === "error") {
-                 throw new Error(chargeData.message || `HTTP error! status: ${response.status}`);
+                 throw new Error(chargeData.message || chargeData.detail || `HTTP error! status: ${response.status}`);
             }
             
-            if (chargeData.status.startsWith("success") && chargeData.payment_page_url) {
-                alert(`You will now be redirected to Coinbase Commerce to complete your payment for ${itemName}.`);
-                window.location.href = chargeData.payment_page_url; // Redirect to Coinbase
-            } else {
-                throw new Error(chargeData.message || "Failed to create payment charge.");
+            if ((chargeData.status === "success" || chargeData.status === "success_simulated") && chargeData.payment_page_url) {
+                alert(`You will be redirected to complete your payment for ${itemName}.`);
+                window.location.href = chargeData.payment_page_url; 
+            } else if (chargeData.status === "success_simulated") {
+                 alert("Payment simulation successful. Subscription should update shortly.");
+                 initializeSubscriptionPage(); // Refresh the page data
+            }
+            else {
+                throw new Error(chargeData.message || "Failed to create payment charge: No payment_page_url.");
             }
         } catch (error) {
             console.error("Error initiating payment:", error);
             alert("Error initiating payment: " + error.message);
-            button.disabled = false; // Re-enable button on error
-            button.textContent = `Renew ($${amountUsd.toFixed(2)})`; // Reset text
+            button.disabled = false; 
+            button.textContent = `Renew ($${amountUsd.toFixed(2)})`; 
         }
-    }
-    
-    function handleRenewPlatformSubscription(event) { // Wrapper to call generic handler
-        handleGenericRenewInitiation(event);
     }
     
     function formatTimeRemaining(totalSeconds) {
@@ -225,11 +236,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const minutes = Math.floor((totalSeconds % (60 * 60)) / 60);
         let parts = [];
         if (days > 0) parts.push(`${days}d`);
-        if (hours > 0 && days < 3) parts.push(`${hours}h`); // Show hours if less than 3 days
-        if (minutes > 0 && days === 0 && hours === 0) parts.push(`${minutes}m`);
-        if (parts.length === 0 && totalSeconds > 0) return "<1m";
-        return parts.join(' ') || "Expired";
+        if (hours > 0 && days < 3) parts.push(`${hours}h`); 
+        if (minutes > 0 && days === 0 && hours < 1) parts.push(`${minutes}m`); // Show minutes if less than an hour left
+        if (parts.length === 0 && totalSeconds > 0) return "<1m"; // Show <1m if very little time left but not expired
+        return parts.join(' ') || "Expired"; // Default to Expired if no parts (shouldn't happen if totalSeconds > 0)
     }
 
-    initializeSubscriptionPage();
+    if (authToken && userId) {
+        initializeSubscriptionPage();
+    } else {
+        // This case should ideally be handled by a global auth check that redirects to login.html
+        console.error("User not authenticated. Cannot display subscription page.");
+        // Optionally, clear parts of the page or show a login prompt.
+        if(activeStrategySubsList) activeStrategySubsList.innerHTML = '<p>Please login to view your subscriptions.</p>';
+    }
 });

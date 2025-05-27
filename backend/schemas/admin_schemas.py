@@ -80,3 +80,48 @@ class AdminActionResponse(BaseModel):
     status: str
     message: str
     detail: Optional[Any] = None
+
+
+# --- Admin Subscription Management Schemas ---
+class AdminSubscriptionItem(BaseModel):
+    id: int
+    user_id: int
+    username: Optional[str] = None
+    strategy_id: int
+    strategy_name: Optional[str] = None
+    api_key_id: int
+    api_key_label: Optional[str] = None
+    is_active: bool
+    subscribed_at: Optional[datetime.datetime] = None
+    expires_at: Optional[datetime.datetime] = None
+    custom_parameters: Optional[Any] = None # Can be dict after parsing, or str
+    status_message: Optional[str] = None
+    celery_task_id: Optional[str] = None # Added this field based on model
+
+    class Config:
+        orm_mode = True
+
+class AdminSubscriptionListResponse(BaseModel):
+    status: str
+    subscriptions: List[AdminSubscriptionItem]
+    total_subscriptions: int
+    page: int
+    per_page: int
+    total_pages: int
+
+class AdminSubscriptionUpdateRequest(BaseModel):
+    new_status_message: Optional[str] = Field(None, max_length=255)
+    new_is_active: Optional[bool] = None
+    new_expires_at_str: Optional[str] = Field(None, description="ISO format datetime string, e.g., YYYY-MM-DDTHH:MM:SS")
+
+
+# --- Admin Dashboard Schemas ---
+class AdminDashboardSummaryData(BaseModel):
+    totalUsers: int
+    totalRevenue: float
+    activeSubscriptions: int
+    totalStrategies: int
+
+class AdminDashboardSummaryResponse(BaseModel):
+    status: str
+    summary: AdminDashboardSummaryData

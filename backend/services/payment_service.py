@@ -42,6 +42,7 @@ def create_coinbase_commerce_charge(db_session: Session, user_id: int,
                                    redirect_url: str = None, 
                                    cancel_url: str = None,
                                    # Include necessary metadata for webhook processing, especially for new subscriptions
+                                   # For "new_strategy_subscription", metadata MUST include 'api_key_id' and 'custom_parameters_json'.
                                    metadata: Optional[Dict[str, Any]] = None
                                    ):
     user = db_session.query(User).filter(User.id == user_id).first()

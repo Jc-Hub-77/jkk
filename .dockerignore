@@ -1,0 +1,28 @@
+# General ignores for the project root
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.env.*
+!backend/.env.example # Ensure example env is not ignored if context is root
+.vscode/
+.idea/
+.git/
+.gitignore
+*.db # Ignore SQLite databases
+*.sqlite3
+*.log
+# Frontend specific build artifacts if any (e.g. node_modules, dist)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# Docker specific files if Dockerfile is in root
+Dockerfile
+Dockerfile.web
+Dockerfile.worker
+docker-compose.yml

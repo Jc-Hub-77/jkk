@@ -148,6 +148,7 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     closed_at = Column(DateTime, nullable=True) # Timestamp when order was closed/filled/canceled
+    raw_order_data = Column(Text, nullable=True) # JSON for exchange-specific details
 
     subscription = relationship("UserStrategySubscription", back_populates="orders")
 
