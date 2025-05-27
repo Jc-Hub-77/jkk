@@ -1,0 +1,33 @@
+# Ignore Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environments
+env/
+venv/
+.venv/
+
+# Ignore IDE/editor specific files
+.vscode/
+.idea/
+
+# Ignore local development databases and logs if any are stored here
+*.db
+*.sqlite3
+*.log*
+
+# Ignore .env file (but not .env.example)
+.env
+.env.*
+!.env.example
+
+# If there are test output files or coverage reports in backend
+.coverage
+htmlcov/
+pytest_cache/
+.pytest_cache/
+
+# If any local instance-specific files are generated
+instance/

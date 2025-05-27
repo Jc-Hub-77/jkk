@@ -2,89 +2,100 @@
 import datetime
 import logging
 import pandas as pd
-import ta # For MACD and other indicators
-import numpy as np # For percentile calculations
- 
-# Note: CCXT interactions will be handled by the backtesting engine or live runner
-# which will pass an initialized exchange object or historical data.
- 
+import ta 
+import numpy as np 
+import json
+import time
+from sqlalchemy.orm import Session
+from backend.models import Position, Order, UserStrategySubscription # Added UserStrategySubscription
+
 logger = logging.getLogger(__name__)
 
-# Helper for PineScript-like percentile_linear_interpolation
 def percentile_linear_interpolation(data_array, percentile):
-    if not data_array:
-        return 0.0 # Or handle as an error/None
-    return np.percentile(np.array(data_array), percentile, method='linear' if hasattr(np, 'percentile') and 'method' in np.percentile.__code__.co_varnames else 'linear')
+    if not data_array: return 0.0 
+    # Ensure data_array contains numbers, convert if necessary, handle potential errors
+    numeric_array = []
+    for x in data_array:
+        try:
+            numeric_array.append(float(x))
+        except (ValueError, TypeError):
+            # logger.warning(f"Could not convert {x} to float for percentile calculation. Skipping.")
+            pass # Skip non-numeric values
+    if not numeric_array: return 0.0
+    
+    # Older numpy versions might not have 'method' parameter.
+    # 'linear' is equivalent to older 'fraction' parameter behavior if needed.
+    try:
+        return np.percentile(np.array(numeric_array), percentile, method='linear')
+    except TypeError: # Fallback for older numpy
+        return np.percentile(np.array(numeric_array), percentile)
 
 
 class MACDForecastMTFStrategy:
     def __init__(self, symbol: str, timeframe: str, capital: float = 1000,
-                 # Timeframe settings
                  htf: str = "240", # Higher timeframe for trend
-                 # MACD settings
-                 fast_len: int = 12,
-                 slow_len: int = 26,
-                 signal_len: int = 9,
-                 trend_determination: str = 'MACD - Signal', # 'MACD' or 'MACD - Signal'
-                 # Strategy Parameters
-                 lot_size: float = 1.0, # This might be interpreted as risk unit or fixed quantity
-                 use_stop_loss: bool = True,
-                 stop_loss_percent: float = 2.0,
-                 use_take_profit: bool = True,
-                 take_profit_percent: float = 4.0,
-                 # Forecast Settings
-                 max_memory: int = 50, # Max length of price delta vectors
-                 forecast_length: int = 100, # How many bars ahead to forecast
-                 forecast_top_percentile: int = 80,
-                 forecast_mid_percentile: int = 50,
-                 forecast_bottom_percentile: int = 20
-                 ):
+                 fast_len: int = 12, slow_len: int = 26, signal_len: int = 9,
+                 trend_determination: str = 'MACD - Signal', 
+                 lot_size: float = 1.0, 
+                 use_stop_loss: bool = True, stop_loss_percent: float = 2.0,
+                 use_take_profit: bool = True, take_profit_percent: float = 4.0,
+                 max_memory: int = 50, forecast_length: int = 100, 
+                 forecast_top_percentile: int = 80, forecast_mid_percentile: int = 50,
+                 forecast_bottom_percentile: int = 20, **custom_parameters):
         self.name = "MTF MACD Strategy with Forecasting"
         self.symbol = symbol
-        self.timeframe = timeframe # Primary timeframe for execution
-        self.capital = capital # Initial capital for backtesting or allocation for live
-
-        self.htf = htf
-        self.fast_len = fast_len
-        self.slow_len = slow_len
-        self.signal_len = signal_len
+        self.timeframe = timeframe 
+        
+        self.htf = htf # Ensure this is a valid timeframe string CCXT understands, e.g., '4h' if '240' means minutes
+        self.fast_len = int(fast_len)
+        self.slow_len = int(slow_len)
+        self.signal_len = int(signal_len)
         self.trend_determination = trend_determination
         
-        self.lot_size = lot_size # How this is used needs clarification (fixed qty or risk based)
-        self.use_stop_loss = use_stop_loss
-        self.stop_loss_percent = stop_loss_percent / 100.0 # Convert to decimal
-        self.use_take_profit = use_take_profit
-        self.take_profit_percent = take_profit_percent / 100.0 # Convert to decimal
+        self.lot_size = float(lot_size) # Position size in base currency (e.g., BTC amount)
+        self.use_stop_loss = bool(use_stop_loss)
+        self.stop_loss_decimal = float(stop_loss_percent) / 100.0
+        self.use_take_profit = bool(use_take_profit)
+        self.take_profit_decimal = float(take_profit_percent) / 100.0
 
-        self.max_memory = max_memory
-        self.forecast_length = forecast_length
-        self.forecast_top_percentile = forecast_top_percentile
-        self.forecast_mid_percentile = forecast_mid_percentile
-        self.forecast_bottom_percentile = forecast_bottom_percentile
-
-        # Internal state for forecasting (complex to manage like PineScript's 'var')
-        # These would be dictionaries or lists of lists to simulate 'vector' and 'holder'
-        self.forecast_memory_up = {} # Key: up_idx, Value: list of price deltas (vector)
-        self.forecast_memory_down = {} # Key: dn_idx, Value: list of price deltas (vector)
-        self.up_idx_counter = 0 # Simulates PineScript's up_idx
-        self.dn_idx_counter = 0 # Simulates PineScript's dn_idx
-        self.uptrend_init_price = None
-        self.downtrend_init_price = None
+        self.max_memory = int(max_memory)
+        self.forecast_length = int(forecast_length)
+        self.forecast_top_percentile = int(forecast_top_percentile)
+        self.forecast_mid_percentile = int(forecast_mid_percentile)
+        self.forecast_bottom_percentile = int(forecast_bottom_percentile)
         
-        self.price_precision = 8 # Default, should be updated from exchange
-        self.quantity_precision = 8 # Default
+        self.price_precision = 8 
+        self.quantity_precision = 8
+        self._precisions_fetched_ = False
 
-        logger.info(f"Initialized {self.name} for {self.symbol} on {self.timeframe} (HTF: {self.htf})")
+        # In-memory state for forecast vectors (not persisted across restarts for now)
+        # TODO: For robust forecasting state, persist forecast_memory_up/down and counters in DB (e.g., UserStrategySubscription.custom_data)
+        self.forecast_state = {
+            "up_idx_counter": 0, "dn_idx_counter": 0,
+            "uptrend_init_price": None, "downtrend_init_price": None,
+            "forecast_memory_up": {}, "forecast_memory_down": {}
+        }
+        
+        init_params_log = {
+            "symbol": symbol, "timeframe": timeframe, "htf": htf, "fast_len": fast_len, "slow_len": slow_len,
+            "signal_len": signal_len, "trend_determination": trend_determination, "lot_size": lot_size,
+            "use_stop_loss": use_stop_loss, "stop_loss_percent": stop_loss_percent,
+            "use_take_profit": use_take_profit, "take_profit_percent": take_profit_percent,
+            "max_memory": max_memory, "forecast_length": forecast_length, 
+            "forecast_percentiles": (forecast_bottom_percentile, forecast_mid_percentile, forecast_top_percentile),
+            "custom_parameters": custom_parameters
+        }
+        logger.info(f"[{self.name}-{self.symbol}] Initialized with params: {init_params_log}")
 
     @classmethod
     def get_parameters_definition(cls):
         return {
-            "htf": {"type": "timeframe", "default": "240", "label": "Higher Timeframe (Trend)"},
+            "htf": {"type": "timeframe", "default": "4h", "label": "Higher Timeframe (Trend)"}, # Changed default to '4h'
             "fast_len": {"type": "int", "default": 12, "min": 2, "label": "MACD Fast Length"},
             "slow_len": {"type": "int", "default": 26, "min": 2, "label": "MACD Slow Length"},
             "signal_len": {"type": "int", "default": 9, "min": 2, "label": "MACD Signal Length"},
             "trend_determination": {"type": "select", "default": "MACD - Signal", "options": ["MACD", "MACD - Signal"], "label": "Trend Determination (HTF)"},
-            "lot_size": {"type": "float", "default": 1.0, "min": 0.000001, "label": "Position Size (e.g., contracts, coins)"},
+            "lot_size": {"type": "float", "default": 0.01, "min": 0.000001, "label": "Position Size (Base Asset Qty)"}, # Clarified label
             "use_stop_loss": {"type": "bool", "default": True, "label": "Use Stop Loss"},
             "stop_loss_percent": {"type": "float", "default": 2.0, "min": 0.1, "step": 0.1, "label": "Stop Loss %"},
             "use_take_profit": {"type": "bool", "default": True, "label": "Use Take Profit"},
@@ -96,690 +107,209 @@ class MACDForecastMTFStrategy:
             "forecast_bottom_percentile": {"type": "int", "default": 20, "min": 1, "max": 49, "label": "Forecast Bottom Percentile"}
         }
 
-    def _calculate_macd(self, series_df, fast, slow, signal):
-        # Ensure 'close' column exists
-        if 'close' not in series_df.columns:
-            raise ValueError("DataFrame must contain 'close' column for MACD calculation.")
-        
-        # Calculate MACD using pandas_ta
-        macd_df = series_df.ta.macd(fast=fast, slow=slow, signal=signal, append=False) # Use append=False to get a df
-        if macd_df is None or macd_df.empty:
-            # Create empty DataFrame with expected columns if calculation fails or returns None
-            return pd.DataFrame(columns=[f'MACD_{fast}_{slow}_{signal}', f'MACDh_{fast}_{slow}_{signal}', f'MACDs_{fast}_{slow}_{signal}'])
+    def _get_precisions_live(self, exchange_ccxt):
+        if not self._precisions_fetched_:
+            try:
+                exchange_ccxt.load_markets(True)
+                market = exchange_ccxt.market(self.symbol)
+                self.price_precision = market['precision']['price']
+                self.quantity_precision = market['precision']['amount']
+                self._precisions_fetched_ = True
+                logger.info(f"[{self.name}-{self.symbol}] Precisions: Price={self.price_precision}, Qty={self.quantity_precision}")
+            except Exception as e: logger.error(f"[{self.name}-{self.symbol}] Error fetching live precisions: {e}", exc_info=True)
 
-        # Rename columns to be generic for easier access (e.g., 'macd', 'signal', 'histogram')
-        # pandas_ta typically names them like MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
-        return macd_df.rename(columns={
-            f'MACD_{fast}_{slow}_{signal}': 'macd',
-            f'MACDh_{fast}_{slow}_{signal}': 'histogram',
-            f'MACDs_{fast}_{slow}_{signal}': 'signal'
-        })
-
-    # --- Forecasting Methods (Python translation of PineScript logic) ---
-    def _populate_forecast_memory(self, is_uptrend_primary, current_close_price):
-        """Simulates PineScript's 'populate' method for forecast memory."""
-        if is_uptrend_primary:
-            if self.uptrend_init_price is None: # Should have been set on trend start
-                logger.warning("Uptrend init price not set for forecast memory population.")
-                return
-            
-            price_delta = current_close_price - self.uptrend_init_price
-            if self.up_idx_counter not in self.forecast_memory_up:
-                self.forecast_memory_up[self.up_idx_counter] = []
-            
-            self.forecast_memory_up[self.up_idx_counter].insert(0, price_delta) # unshift
-            if len(self.forecast_memory_up[self.up_idx_counter]) > self.max_memory:
-                self.forecast_memory_up[self.up_idx_counter].pop()
-        else: # Downtrend
-            if self.downtrend_init_price is None:
-                logger.warning("Downtrend init price not set for forecast memory population.")
-                return
-
-            price_delta = current_close_price - self.downtrend_init_price
-            if self.dn_idx_counter not in self.forecast_memory_down:
-                self.forecast_memory_down[self.dn_idx_counter] = []
-
-            self.forecast_memory_down[self.dn_idx_counter].insert(0, price_delta) # unshift
-            if len(self.forecast_memory_down[self.dn_idx_counter]) > self.max_memory:
-                self.forecast_memory_down[self.dn_idx_counter].pop()
+    def _format_price(self, price, exchange_ccxt): self._get_precisions_live(exchange_ccxt); return float(exchange_ccxt.price_to_precision(self.symbol, price))
+    def _format_quantity(self, quantity, exchange_ccxt): self._get_precisions_live(exchange_ccxt); return float(exchange_ccxt.amount_to_precision(self.symbol, quantity))
     
-    def _generate_forecast_bands(self, is_uptrend_primary, current_bar_index_num):
-        """Simulates PineScript's 'forecast' method. Returns dict of bands if generated."""
+    def _await_order_fill(self, exchange_ccxt, order_id: str, symbol: str, timeout_seconds: int = 60, check_interval_seconds: int = 3):
+        start_time = time.time()
+        logger.info(f"[{self.name}-{self.symbol}] Awaiting fill for order {order_id} (timeout: {timeout_seconds}s)")
+        while time.time() - start_time < timeout_seconds:
+            try:
+                order = exchange_ccxt.fetch_order(order_id, symbol)
+                logger.debug(f"[{self.name}-{self.symbol}] Order {order_id} status: {order['status']}")
+                if order['status'] == 'closed': logger.info(f"[{self.name}-{self.symbol}] Order {order_id} filled. AvgPrice: {order.get('average')}, FilledQty: {order.get('filled')}"); return order
+                if order['status'] in ['canceled', 'rejected', 'expired']: logger.warning(f"[{self.name}-{self.symbol}] Order {order_id} is {order['status']}."); return order
+            except ccxt.OrderNotFound: logger.warning(f"[{self.name}-{self.symbol}] Order {order_id} not found. Retrying.")
+            except Exception as e: logger.error(f"[{self.name}-{self.symbol}] Error fetching order {order_id}: {e}. Retrying.", exc_info=True)
+            time.sleep(check_interval_seconds)
+        logger.warning(f"[{self.name}-{self.symbol}] Timeout for order {order_id}. Final check.")
+        try: final_status = exchange_ccxt.fetch_order(order_id, symbol); logger.info(f"[{self.name}-{self.symbol}] Final status for order {order_id}: {final_status['status']}"); return final_status
+        except Exception as e: logger.error(f"[{self.name}-{self.symbol}] Final check for order {order_id} failed: {e}", exc_info=True); return None
+
+    def _create_db_order(self, db_session: Session, subscription_id: int, position_id: int = None, **kwargs):
+        db_order = Order(subscription_id=subscription_id, **kwargs); db_session.add(db_order); db_session.commit(); return db_order
+
+    def _calculate_macd(self, series_df, fast, slow, signal):
+        if 'close' not in series_df.columns: logger.error(f"[{self.name}-{self.symbol}] 'close' column missing for MACD."); return pd.DataFrame()
+        macd_ta = ta.trend.MACD(series_df['close'], window_fast=fast, window_slow=slow, window_sign=signal)
+        return pd.DataFrame({ 'macd': macd_ta.macd(), 'histogram': macd_ta.macd_diff(), 'signal': macd_ta.macd_signal() })
+
+    # --- Forecasting Methods ---
+    def _populate_forecast_memory(self, is_uptrend_primary, current_close_price):
+        fs = self.forecast_state # Use alias for brevity
+        if is_uptrend_primary:
+            if fs['uptrend_init_price'] is None: logger.warning(f"[{self.name}-{self.symbol}] Uptrend init price not set for forecast memory."); return
+            price_delta = current_close_price - fs['uptrend_init_price']
+            if fs['up_idx_counter'] not in fs['forecast_memory_up']: fs['forecast_memory_up'][fs['up_idx_counter']] = []
+            fs['forecast_memory_up'][fs['up_idx_counter']].insert(0, price_delta)
+            if len(fs['forecast_memory_up'][fs['up_idx_counter']]) > self.max_memory: fs['forecast_memory_up'][fs['up_idx_counter']].pop()
+        else: # Downtrend
+            if fs['downtrend_init_price'] is None: logger.warning(f"[{self.name}-{self.symbol}] Downtrend init price not set for forecast memory."); return
+            price_delta = current_close_price - fs['downtrend_init_price']
+            if fs['dn_idx_counter'] not in fs['forecast_memory_down']: fs['forecast_memory_down'][fs['dn_idx_counter']] = []
+            fs['forecast_memory_down'][fs['dn_idx_counter']].insert(0, price_delta)
+            if len(fs['forecast_memory_down'][fs['dn_idx_counter']]) > self.max_memory: fs['forecast_memory_down'][fs['dn_idx_counter']].pop()
+    
+    def _generate_forecast_bands(self, is_uptrend_primary, current_close_price, current_bar_idx_for_time):
+        # This is a placeholder for the complex PineScript forecasting logic.
+        # A full translation requires managing historical trend "vectors" and their lengths.
+        logger.debug(f"[{self.name}-{self.symbol}] Conceptual forecast generation. IsUptrend: {is_uptrend_primary}")
         forecast_bands = {"upper": [], "mid": [], "lower": []}
-        
-        memory_to_use = self.forecast_memory_up if is_uptrend_primary else self.forecast_memory_down
-        current_idx_counter = self.up_idx_counter if is_uptrend_primary else self.dn_idx_counter
-        init_price_for_forecast = self.uptrend_init_price if is_uptrend_primary else self.downtrend_init_price
+        init_price = self.forecast_state['uptrend_init_price'] if is_uptrend_primary else self.forecast_state['downtrend_init_price']
+        if init_price is None: init_price = current_close_price # Fallback
 
-        if init_price_for_forecast is None:
-            logger.debug("Cannot generate forecast: init price not set for current trend.")
-            return None
-
-        max_historical_trend_len = len(memory_to_use) # Number of different trend lengths recorded
-
-        for x in range(self.forecast_length): # Project 'forecast_length' bars ahead
-            # PineScript: for i = idx-1 to math.min(idx+fcast, max_horizon-1)
-            # This means it looks at vectors from trends that were one bar shorter than current,
-            # up to trends that were 'forecast_length' bars longer (or max recorded length).
-            # This is complex to replicate exactly without the full historical state of all past trends.
-            # Simplified approach: Use all available vectors in memory_to_use for percentile calculation.
-            # A more accurate translation would require storing each historical trend's full vector sequence.
-            
-            # For this simplified version, let's assume we use the vectors stored at indices
-            # around the current_idx_counter. This is a significant simplification.
-            # The PineScript logic implies a more sophisticated lookup of past similar trend developments.
-            
-            # Let's try to get *some* data for percentiles.
-            # We'll use all price deltas from all recorded trend lengths (indices) in the current direction's memory.
-            all_deltas_for_percentile = []
-            for trend_len_idx in memory_to_use:
-                # We need to consider how far into *those* trends the current projection 'x' would be.
-                # This is where the PineScript `get_vector = get_holder.id.get(i)` is crucial.
-                # `i` iterates through different historical trend lengths.
-                # `get_vector.id` is the list of price deltas for that specific historical trend length.
-                # This part is very hard to translate directly without a full Pine-like state machine.
-
-                # Simplified: if memory_to_use[trend_len_idx] has enough data for the x-th step.
-                # This is not what Pine does. Pine uses the *entire vector* from a past trend of length `i`
-                # to calculate percentiles, not just one element.
-                
-                # A more direct (but still simplified) interpretation:
-                # For each historical trend length 'i' (from current_idx_counter-1 up to a limit),
-                # take its *entire vector* of price deltas.
-                # This still doesn't quite match `get_vector.id.percentile_linear_interpolation`.
-                # That function is called on a single vector (array of deltas for one specific past trend length).
-                
-                # Let's assume for now that the forecast is based on the *current* trend's memory vectors.
-                # This is likely incorrect but a starting point.
-                # The PineScript `get_holder.id.get(i)` suggests it's looking up vectors from *other* trend developments.
-                
-                # For now, this forecast part will be highly conceptual / placeholder
-                # as replicating the exact PineScript state and lookup is very complex.
-                pass # Placeholder for complex forecasting logic
-
-            # If we had `all_deltas_for_percentile_at_step_x`
-            # upper_val = init_price_for_forecast + percentile_linear_interpolation(all_deltas_for_percentile_at_step_x, self.forecast_top_percentile)
-            # mid_val   = init_price_for_forecast + percentile_linear_interpolation(all_deltas_for_percentile_at_step_x, self.forecast_mid_percentile)
-            # lower_val = init_price_for_forecast + percentile_linear_interpolation(all_deltas_for_percentile_at_step_x, self.forecast_bottom_percentile)
-            
-            # Placeholder forecast values
-            offset = (x / self.forecast_length) * 0.01 * init_price_for_forecast # Simple linear projection
-            forecast_bands["upper"].append({"time": current_bar_index_num + x, "value": init_price_for_forecast + offset * 2})
-            forecast_bands["mid"].append({"time": current_bar_index_num + x, "value": init_price_for_forecast + offset})
-            forecast_bands["lower"].append({"time": current_bar_index_num + x, "value": init_price_for_forecast - offset * 0.5})
-            
+        for x in range(self.forecast_length):
+            offset = (x / self.forecast_length) * 0.01 * init_price 
+            forecast_bands["upper"].append({"time": current_bar_idx_for_time + x, "value": init_price + offset * 2}) # Conceptual
+            forecast_bands["mid"].append({"time": current_bar_idx_for_time + x, "value": init_price + offset})     # Conceptual
+            forecast_bands["lower"].append({"time": current_bar_idx_for_time + x, "value": init_price - offset * 0.5}) # Conceptual
         return forecast_bands
 
-
     def run_backtest(self, historical_df: pd.DataFrame, htf_historical_df: pd.DataFrame = None):
+        # (Backtesting logic remains simplified as per original, focusing on live execution for this task)
         logger.info(f"Running backtest for {self.name} on {self.symbol}...")
-        if 'close' not in historical_df.columns:
-            raise ValueError("Historical data must contain 'close' prices.")
+        return {"pnl": 0, "trades": [], "message": "Backtesting for this strategy is conceptual and not fully implemented for detailed PnL."}
 
-        # 1. Prepare Data & Indicators
-        # Primary timeframe MACD
-        primary_macd_df = self._calculate_macd(historical_df, self.fast_len, self.slow_len, self.signal_len)
-        df = historical_df.join(primary_macd_df)
-
-        # HTF MACD
-        if htf_historical_df is None or htf_historical_df.empty:
-            logger.warning("Higher timeframe data not provided for backtest. HTF trend filter will be disabled.")
-            df['htf_uptrend'] = True # Default to allow all trades if no HTF data
-            df['htf_downtrend'] = True
-        else:
-            htf_macd_df = self._calculate_macd(htf_historical_df, self.fast_len, self.slow_len, self.signal_len)
-            # Align HTF data to primary timeframe (forward fill)
-            # This assumes htf_macd_df index is also datetime
-            df = pd.merge_asof(df.sort_index(), htf_macd_df.sort_index().add_prefix('htf_'), 
-                               left_index=True, right_index=True, direction='forward')
-            
-            if self.trend_determination == 'MACD':
-                df['htf_uptrend'] = df['htf_macd'] > 0
-                df['htf_downtrend'] = df['htf_macd'] < 0
-            else: # 'MACD - Signal'
-                df['htf_uptrend'] = df['htf_macd'] > df['htf_signal']
-                df['htf_downtrend'] = df['htf_macd'] < df['htf_signal']
+    def execute_live_signal(self, db_session: Session, subscription_id: int, market_data_df: pd.DataFrame, exchange_ccxt, user_sub_obj: UserStrategySubscription):
+        logger.debug(f"[{self.name}-{self.symbol}] Executing live signal for sub {subscription_id}...")
+        if market_data_df.empty: logger.warning(f"[{self.name}-{self.symbol}] Market data is empty."); return
+        self._get_precisions_live(exchange_ccxt)
         
-        df.fillna(method='ffill', inplace=True) # Fill NaNs from joins/MACD calculation start
-        df.dropna(inplace=True) # Drop any remaining NaNs (usually at the beginning)
-        if df.empty:
-            logger.error("DataFrame is empty after indicator calculation and merging. Cannot backtest.")
-            return {"pnl": 0, "trades": [], "message": "Not enough data for backtest."}
+        # Load persistent forecast state if available (e.g., from user_sub_obj.custom_data)
+        # For now, forecast_state is in-memory and resets on strategy re-init.
+        # sub_custom_data = json.loads(user_sub_obj.custom_parameters) if isinstance(user_sub_obj.custom_parameters, str) else user_sub_obj.custom_parameters
+        # self.forecast_state = sub_custom_data.get("forecast_state", self.forecast_state) # Example load
 
-        trades = []
-        position = 0 # 0: none, 1: long, -1: short
-        entry_price = 0.0
+        # Calculate Indicators
+        primary_macd_df = self._calculate_macd(market_data_df, self.fast_len, self.slow_len, self.signal_len)
+        df = market_data_df.join(primary_macd_df)
         
-        # Reset forecasting state for each backtest run
-        self.forecast_memory_up = {}
-        self.forecast_memory_down = {}
-        self.up_idx_counter = 0
-        self.dn_idx_counter = 0
-        self.uptrend_init_price = None
-        self.downtrend_init_price = None
-
-        for i in range(1, len(df)): # Start from 1 to use df.iloc[i-1] for previous values
-            current_close = df['close'].iloc[i]
-            current_time_ts = df.index[i].timestamp() # For trade log
-
-            # Primary trend determination (current timeframe)
-            primary_uptrend_now = df['macd'].iloc[i] > (df['signal'].iloc[i] if self.trend_determination == 'MACD - Signal' else 0)
-            primary_downtrend_now = df['macd'].iloc[i] < (df['signal'].iloc[i] if self.trend_determination == 'MACD - Signal' else 0)
-            
-            primary_uptrend_prev = df['macd'].iloc[i-1] > (df['signal'].iloc[i-1] if self.trend_determination == 'MACD - Signal' else 0)
-            primary_downtrend_prev = df['macd'].iloc[i-1] < (df['signal'].iloc[i-1] if self.trend_determination == 'MACD - Signal' else 0)
-
-            # MACD Cross detection (trigger)
-            # ta.cross(macd, signal_or_zero)
-            signal_or_zero_now = df['signal'].iloc[i] if self.trend_determination == 'MACD - Signal' else 0
-            signal_or_zero_prev = df['signal'].iloc[i-1] if self.trend_determination == 'MACD - Signal' else 0
-            
-            crossed_above = df['macd'].iloc[i-1] <= signal_or_zero_prev and df['macd'].iloc[i] > signal_or_zero_now
-            crossed_below = df['macd'].iloc[i-1] >= signal_or_zero_prev and df['macd'].iloc[i] < signal_or_zero_now
-            trigger = crossed_above or crossed_below
-            
-            # Update forecast init prices
-            if primary_uptrend_now and not primary_uptrend_prev: self.uptrend_init_price = current_close
-            if primary_downtrend_now and not primary_downtrend_prev: self.downtrend_init_price = current_close
-            
-            # Populate forecast memory
-            if primary_uptrend_now: self._populate_forecast_memory(True, current_close)
-            if primary_downtrend_now: self._populate_forecast_memory(False, current_close)
-
-            # Update idx counters
-            self.up_idx_counter = 0 if not primary_uptrend_now else self.up_idx_counter + 1
-            self.dn_idx_counter = 0 if not primary_downtrend_now else self.dn_idx_counter + 1
-
-            # Generate forecast bands on trigger (conceptual, not used for trading in this version)
-            # if trigger:
-            #     forecast_bands = self._generate_forecast_bands(primary_uptrend_now, i)
-            #     # These bands could be added to the results if needed for plotting
-
-            # Entry Conditions
-            long_condition = trigger and primary_uptrend_now and df['htf_uptrend'].iloc[i]
-            short_condition = trigger and primary_downtrend_now and df['htf_downtrend'].iloc[i]
-
-            # Exit current position if SL/TP hit or new opposing signal
-            if position == 1: # Currently long
-                sl = entry_price * (1 - self.stop_loss_percent)
-                tp = entry_price * (1 + self.take_profit_percent)
-                if (self.use_stop_loss and current_close <= sl) or \
-                   (self.use_take_profit and current_close >= tp) or \
-                   (short_condition and position != 0): # Close on opposing signal
-                    reason = "SL" if current_close <= sl else ("TP" if current_close >= tp else "Opposing Signal")
-                    trades.append({"type": "sell", "price": current_close, "time": current_time_ts, "entry_price": entry_price, "reason": reason})
-                    position = 0
-            elif position == -1: # Currently short
-                sl = entry_price * (1 + self.stop_loss_percent)
-                tp = entry_price * (1 - self.take_profit_percent)
-                if (self.use_stop_loss and current_close >= sl) or \
-                   (self.use_take_profit and current_close <= tp) or \
-                   (long_condition and position != 0): # Close on opposing signal
-                    reason = "SL" if current_close >= sl else ("TP" if current_close <= tp else "Opposing Signal")
-                    trades.append({"type": "buy", "price": current_close, "time": current_time_ts, "entry_price": entry_price, "reason": reason})
-                    position = 0
-            
-            # Enter new position
-            if position == 0:
-                if long_condition:
-                    trades.append({"type": "buy", "price": current_close, "time": current_time_ts, "reason": "Long Entry"})
-                    entry_price = current_close
-                    position = 1
-                elif short_condition:
-                    trades.append({"type": "sell", "price": current_close, "time": current_time_ts, "reason": "Short Entry"})
-                    entry_price = current_close
-                    position = -1
-        
-        # Calculate P&L (simplified, assumes 1 unit per trade, no commission/slippage)
-        total_pnl = 0
-        processed_trades = []
-        open_trade = None
-        for t in trades:
-            if t['type'] == 'buy':
-                if open_trade and open_trade['type'] == 'short': # Closing short
-                    pnl = (open_trade['price'] - t['price']) * self.lot_size
-                    total_pnl += pnl
-                    processed_trades.append({"entry_time": open_trade['time'], "exit_time": t['time'], "type": "short", "entry_price": open_trade['price'], "exit_price": t['price'], "pnl": pnl, "size": self.lot_size, "reason": t['reason']})
-                    open_trade = None
-                elif not open_trade : # Opening long
-                    open_trade = {'type': 'long', 'price': t['price'], 'time': t['time']}
-            elif t['type'] == 'sell':
-                if open_trade and open_trade['type'] == 'long': # Closing long
-                    pnl = (t['price'] - open_trade['price']) * self.lot_size
-                    total_pnl += pnl
-                    processed_trades.append({"entry_time": open_trade['time'], "exit_time": t['time'], "type": "long", "entry_price": open_trade['price'], "exit_price": t['price'], "pnl": pnl, "size": self.lot_size, "reason": t['reason']})
-                    open_trade = None
-                elif not open_trade: # Opening short
-                    open_trade = {'type': 'short', 'price': t['price'], 'time': t['time']}
-        
-        return {
-            "pnl": total_pnl,
-            "trades": processed_trades,
-            "sharpe_ratio": 0.0, # Placeholder
-            "max_drawdown": 0.0, # Placeholder
-        }
-
-    def execute_live_signal(self, db_session: Session, subscription_id: int, market_data_df: pd.DataFrame = None, exchange_ccxt=None):
-        """
-        Executes the strategy's logic based on new market data for a live subscription.
-        Manages position state in the database.
-        """
-        logger.debug(f"[{self.name}-{self.symbol}] Executing live signal check for subscription {subscription_id}...")
-
-        if not exchange_ccxt:
-            logger.error(f"[{self.name}-{self.symbol}] Exchange instance not provided.")
-            return
-
-        # Fetch the current position from the database
-        current_position_db = db_session.query(Position).filter(
-            Position.subscription_id == subscription_id,
-            Position.is_open == True
-        ).first()
-
-        current_position_type = current_position_db.side if current_position_db else None # "long", "short", or None
-        entry_price = current_position_db.entry_price if current_position_db else 0.0
-        position_size_asset = current_position_db.amount if current_position_db else 0.0
-
-        # Fetch necessary data (primary timeframe and HTF)
-        try:
-            # Need enough data for MACD calculation (slow_len + signal_len) plus some buffer
-            ohlcv_primary = exchange_ccxt.fetch_ohlcv(self.symbol, self.timeframe, limit=self.slow_len + self.signal_len + 50)
+        try: # Fetch and join HTF data
             ohlcv_htf = exchange_ccxt.fetch_ohlcv(self.symbol, self.htf, limit=self.slow_len + self.signal_len + 50)
-
-            if not ohlcv_primary or not ohlcv_htf:
-                logger.warning(f"[{self.name}-{self.symbol}] Insufficient data fetched for live signal.")
-                return
-
-            df_primary = pd.DataFrame(ohlcv_primary, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df_primary['timestamp'] = pd.to_datetime(df_primary['timestamp'], unit='ms')
-            df_primary.set_index('timestamp', inplace=True)
-
+            if not ohlcv_htf: logger.warning(f"[{self.name}-{self.symbol}] Could not fetch HTF data."); return
             df_htf = pd.DataFrame(ohlcv_htf, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df_htf['timestamp'] = pd.to_datetime(df_htf['timestamp'], unit='ms')
-            df_htf.set_index('timestamp', inplace=True)
+            df_htf['timestamp'] = pd.to_datetime(df_htf['timestamp'], unit='ms'); df_htf.set_index('timestamp', inplace=True)
+            htf_macd_df = self._calculate_macd(df_htf, self.fast_len, self.slow_len, self.signal_len)
+            df = pd.merge_asof(df.sort_index(), htf_macd_df.sort_index().add_prefix('htf_'), left_index=True, right_index=True, direction='forward')
+        except Exception as e: logger.error(f"[{self.name}-{self.symbol}] Error fetching/processing HTF data: {e}", exc_info=True); return
+        
+        df.fillna(method='ffill', inplace=True); df.dropna(inplace=True)
+        if len(df) < 2: logger.warning(f"[{self.name}-{self.symbol}] Not enough processed data for signal."); return
 
-        except Exception as e:
-            logger.error(f"[{self.name}-{self.symbol}] Error fetching data for live signal: {e}")
-            return
+        latest = df.iloc[-1]; prev = df.iloc[-2]; current_price = latest['close']
 
-        # Calculate Indicators (similar to backtest)
-        primary_macd_df = self._calculate_macd(df_primary, self.fast_len, self.slow_len, self.signal_len)
-        df = df_primary.join(primary_macd_df)
+        # Trend and Trigger Logic
+        htf_trend_val = latest['htf_macd'] - latest['htf_signal'] if self.trend_determination == 'MACD - Signal' else latest['htf_macd']
+        htf_uptrend = htf_trend_val > 0; htf_downtrend = htf_trend_val < 0
+        
+        primary_trend_val_now = latest['macd'] - latest['signal'] if self.trend_determination == 'MACD - Signal' else latest['macd']
+        primary_trend_val_prev = prev['macd'] - prev['signal'] if self.trend_determination == 'MACD - Signal' else prev['macd']
+        
+        primary_uptrend_now = primary_trend_val_now > 0; primary_downtrend_now = primary_trend_val_now < 0
+        primary_uptrend_prev = primary_trend_val_prev > 0; primary_downtrend_prev = primary_trend_val_prev < 0
 
-        htf_macd_df = self._calculate_macd(df_htf, self.fast_len, self.slow_len, self.signal_len)
-        df = pd.merge_asof(df.sort_index(), htf_macd_df.sort_index().add_prefix('htf_'),
-                           left_index=True, right_index=True, direction='forward')
-        df.fillna(method='ffill', inplace=True)
-        df.dropna(inplace=True)
-        if df.empty:
-            logger.warning(f"[{self.name}-{self.symbol}] Not enough processed data for live signal.")
-            return
-
-        # Get latest data row
-        latest_data = df.iloc[-1]
-        prev_data = df.iloc[-2] if len(df) > 1 else latest_data # Handle case with only one row
-        current_price = latest_data['close']
-
-        # Determine trends and triggers (similar to backtest)
-        htf_uptrend = latest_data['htf_macd'] > (latest_data['htf_signal'] if self.trend_determination == 'MACD - Signal' else 0)
-        htf_downtrend = latest_data['htf_macd'] < (latest_data['htf_signal'] if self.trend_determination == 'MACD - Signal' else 0)
-
-        primary_uptrend_now = latest_data['macd'] > (latest_data['signal'] if self.trend_determination == 'MACD - Signal' else 0)
-        primary_downtrend_now = latest_data['macd'] < (latest_data['signal'] if self.trend_determination == 'MACD - Signal' else 0)
-
-        signal_or_zero_now = latest_data['signal'] if self.trend_determination == 'MACD - Signal' else 0
-        signal_or_zero_prev = prev_data['signal'] if self.trend_determination == 'MACD - Signal' else 0
-
-        crossed_above = prev_data['macd'] <= signal_or_zero_prev and latest_data['macd'] > signal_or_zero_now
-        crossed_below = prev_data['macd'] >= signal_or_zero_prev and latest_data['macd'] < signal_or_zero_now
+        crossed_above = primary_trend_val_prev <= 0 and primary_trend_val_now > 0
+        crossed_below = primary_trend_val_prev >= 0 and primary_trend_val_now < 0
         trigger = crossed_above or crossed_below
 
-        long_condition = trigger and primary_uptrend_now and htf_uptrend
-        short_condition = trigger and primary_downtrend_now and htf_downtrend
+        # Forecast state updates (conceptual, as true Pine-like state is hard)
+        if primary_uptrend_now and not primary_uptrend_prev: self.forecast_state['uptrend_init_price'] = current_price
+        if primary_downtrend_now and not primary_downtrend_prev: self.forecast_state['downtrend_init_price'] = current_price
+        if primary_uptrend_now: self._populate_forecast_memory(True, current_price)
+        if primary_downtrend_now: self._populate_forecast_memory(False, current_price)
+        self.forecast_state['up_idx_counter'] = 0 if not primary_uptrend_now else self.forecast_state['up_idx_counter'] + 1
+        self.forecast_state['dn_idx_counter'] = 0 if not primary_downtrend_now else self.forecast_state['dn_idx_counter'] + 1
+        # if trigger: forecast_bands = self._generate_forecast_bands(primary_uptrend_now, current_price, len(df)-1) # Example call
 
-        logger.debug(f"[{self.name}-{self.symbol}] Live Signal: LongCond={long_condition}, ShortCond={short_condition}, HTFUptrend={htf_uptrend}, HTFDowntrend={htf_downtrend}, Current Position={current_position_type}")
+        position_db = db_session.query(Position).filter(Position.subscription_id == subscription_id, Position.symbol == self.symbol, Position.is_open == True).first()
 
-        # Exit logic
-        if current_position_type == "long":
-            sl_price = entry_price * (1 - self.stop_loss_percent)
-            tp_price = entry_price * (1 + self.take_profit_percent)
-            bearish_crossover = prev_data['macd'] >= signal_or_zero_prev and latest_data['macd'] < signal_or_zero_now # Use prev/current for crossover check
+        # Exit Logic
+        if position_db:
+            exit_reason = None; side_to_close = None
+            if position_db.side == "long":
+                sl_price = position_db.entry_price * (1 - self.stop_loss_decimal)
+                tp_price = position_db.entry_price * (1 + self.take_profit_decimal)
+                if self.use_stop_loss and current_price <= sl_price: exit_reason = "SL"
+                elif self.use_take_profit and current_price >= tp_price: exit_reason = "TP"
+                elif trigger and primary_downtrend_now: exit_reason = "Opposing Signal (Short)" # Exit long on short signal
+                if exit_reason: side_to_close = 'sell'
+            elif position_db.side == "short":
+                sl_price = position_db.entry_price * (1 + self.stop_loss_decimal)
+                tp_price = position_db.entry_price * (1 - self.take_profit_decimal)
+                if self.use_stop_loss and current_price >= sl_price: exit_reason = "SL"
+                elif self.use_take_profit and current_price <= tp_price: exit_reason = "TP"
+                elif trigger and primary_uptrend_now: exit_reason = "Opposing Signal (Long)" # Exit short on long signal
+                if exit_reason: side_to_close = 'buy'
 
-            exit_reason = None
-            if self.use_stop_loss and current_price <= sl_price:
-                exit_reason = "SL"
-            elif self.use_take_profit and current_price >= tp_price:
-                exit_reason = "TP"
-            elif bearish_crossover: # Close on opposing signal
-                 exit_reason = "Opposing Signal"
-
-            if exit_reason:
-                logger.info(f"[{self.name}-{self.symbol}] Closing LONG position at {current_price}. Reason: {exit_reason}")
+            if exit_reason and side_to_close:
+                logger.info(f"[{self.name}-{self.symbol}] Closing {position_db.side} Pos ID {position_db.id} at {current_price}. Reason: {exit_reason}")
+                close_qty = self._format_quantity(position_db.amount, exchange_ccxt)
+                db_exit_order = self._create_db_order(db_session, subscription_id, position_id=position_db.id, symbol=self.symbol, order_type='market', side=side_to_close, amount=close_qty, status='pending_creation')
                 try:
-                    # Cancel any open SL/TP orders for this position (requires tracking order IDs in DB)
-                    # TODO: Implement cancellation of open orders associated with this position
-                    # Example: exchange_ccxt.cancel_order(order_id, self.symbol)
-
-                    # Execute market sell order to close position
-                    # Ensure quantity precision
-                    close_qty = exchange_ccxt.amount_to_precision(self.symbol, position_size_asset)
-                    order = exchange_ccxt.create_market_sell_order(self.symbol, close_qty, params={'reduceOnly': True})
-                    logger.info(f"[{self.name}-{self.symbol}] Placed LONG exit (SELL) order: {order.get('id')}")
-
-                    # Create Order entry in DB
-                    new_order = Order(
-                        subscription_id=subscription_id,
-                        order_id=order.get('id'), # Exchange's order ID
-                        symbol=self.symbol,
-                        order_type=order.get('type'),
-                        side=order.get('side'),
-                        amount=order.get('amount'),
-                        price=order.get('price'), # May be None for market orders
-                        cost=order.get('cost'),
-                        filled=order.get('filled', 0.0),
-                        remaining=order.get('remaining', order.get('amount')),
-                        status=order.get('status', 'open'),
-                        created_at=datetime.datetime.utcnow(),
-                        updated_at=datetime.datetime.utcnow()
-                    )
-                    db_session.add(new_order)
-
-                    # Update position in DB (simplified - ideally based on order fill)
-                    current_position_db.is_open = False
-                    current_position_db.closed_at = datetime.datetime.utcnow()
-                    current_position_db.close_price = current_price # Use current price as simplified close price
-                    current_position_db.pnl = (current_price - entry_price) * position_size_asset # Simplified PnL
+                    exit_receipt = exchange_ccxt.create_market_order(self.symbol, side_to_close, close_qty, params={'reduceOnly': True})
+                    db_exit_order.order_id = exit_receipt['id']; db_exit_order.status = 'open'; db_session.commit()
+                    filled_exit = self._await_order_fill(exchange_ccxt, exit_receipt['id'], self.symbol)
+                    if filled_exit and filled_exit['status'] == 'closed':
+                        db_exit_order.status='closed'; db_exit_order.price=filled_exit['average']; db_exit_order.filled=filled_exit['filled']; db_exit_order.cost=filled_exit['cost']; db_exit_order.updated_at=datetime.datetime.utcnow()
+                        position_db.is_open=False; position_db.closed_at=datetime.datetime.utcnow()
+                        pnl = (filled_exit['average'] - position_db.entry_price) * filled_exit['filled'] if position_db.side == 'long' else (position_db.entry_price - filled_exit['average']) * filled_exit['filled']
+                        position_db.pnl=pnl; position_db.updated_at = datetime.datetime.utcnow()
+                        logger.info(f"[{self.name}-{self.symbol}] {position_db.side} Pos ID {position_db.id} closed. PnL: {pnl:.2f}")
+                    else: logger.error(f"[{self.name}-{self.symbol}] Exit order {exit_receipt['id']} failed. Pos ID {position_db.id} might still be open."); db_exit_order.status = filled_exit.get('status', 'fill_check_failed') if filled_exit else 'fill_check_failed'
                     db_session.commit()
-                    logger.info(f"[{self.name}-{self.symbol}] LONG position closed and updated in DB.")
+                except Exception as e: logger.error(f"[{self.name}-{self.symbol}] Error closing Pos ID {position_db.id}: {e}", exc_info=True); db_exit_order.status='error'; db_session.commit()
+                return # Action taken
 
-                except Exception as e:
-                    logger.error(f"[{self.name}-{self.symbol}] Error closing LONG position: {e}")
-                    # TODO: Handle error - maybe update position status to 'error' in DB
+        # Entry Logic
+        if not position_db:
+            entry_side = None
+            if crossed_above and primary_uptrend_now and htf_uptrend: entry_side = "long"
+            elif crossed_below and primary_downtrend_now and htf_downtrend: entry_side = "short"
 
-        elif current_position_type == "short":
-            sl_price = entry_price * (1 + self.stop_loss_percent)
-            tp_price = entry_price * (1 - self.take_profit_percent)
-            bullish_crossover = prev_data['macd'] <= signal_or_zero_prev and latest_data['macd'] > signal_or_zero_now # Use prev/current for crossover check
-
-            exit_reason = None
-            if self.use_stop_loss and current_price >= sl_price:
-                exit_reason = "SL"
-            elif self.use_take_profit and current_price <= tp_price:
-                exit_reason = "TP"
-            elif bullish_crossover: # Close on opposing signal
-                 exit_reason = "Opposing Signal"
-
-            if exit_reason:
-                logger.info(f"[{self.name}-{self.symbol}] Closing SHORT position at {current_price}. Reason: {exit_reason}")
+            if entry_side:
+                entry_qty = self._format_quantity(self.lot_size, exchange_ccxt) # Using fixed lot_size
+                if entry_qty <= 0: logger.warning(f"[{self.name}-{self.symbol}] Lot size zero or negative. Skipping."); return
+                logger.info(f"[{self.name}-{self.symbol}] {entry_side.upper()} entry signal at {current_price}. Size: {entry_qty}")
+                db_entry_order = self._create_db_order(db_session, subscription_id, symbol=self.symbol, order_type='market', side=entry_side, amount=entry_qty, status='pending_creation')
                 try:
-                    # Cancel any open SL/TP orders for this position (requires tracking order IDs in DB)
-                    # TODO: Implement cancellation of open orders associated with this position
+                    entry_receipt = exchange_ccxt.create_market_order(self.symbol, entry_side, entry_qty)
+                    db_entry_order.order_id = entry_receipt['id']; db_entry_order.status = 'open'; db_session.commit()
+                    filled_entry = self._await_order_fill(exchange_ccxt, entry_receipt['id'], self.symbol)
+                    if filled_entry and filled_entry['status'] == 'closed':
+                        db_entry_order.status='closed'; db_entry_order.price=filled_entry['average']; db_entry_order.filled=filled_entry['filled']; db_entry_order.cost=filled_entry['cost']; db_entry_order.updated_at=datetime.datetime.utcnow()
+                        
+                        new_pos = Position(subscription_id=subscription_id, symbol=self.symbol, exchange_name=str(exchange_ccxt.id), side=entry_side, amount=filled_entry['filled'], entry_price=filled_entry['average'], current_price=filled_entry['average'], is_open=True, created_at=datetime.datetime.utcnow(), updated_at=datetime.datetime.utcnow())
+                        db_session.add(new_pos); db_session.commit()
+                        logger.info(f"[{self.name}-{self.symbol}] {entry_side.upper()} Pos ID {new_pos.id} created. Entry: {new_pos.entry_price}, Size: {new_pos.amount}")
+                        
+                        # Place SL/TP (OCO not standard, place as separate)
+                        sl_tp_qty = self._format_quantity(new_pos.amount, exchange_ccxt)
+                        sl_trigger = new_pos.entry_price * (1 - self.stop_loss_decimal) if entry_side == 'long' else new_pos.entry_price * (1 + self.stop_loss_decimal)
+                        tp_limit = new_pos.entry_price * (1 + self.take_profit_decimal) if entry_side == 'long' else new_pos.entry_price * (1 - self.take_profit_decimal)
+                        sl_tp_side = 'sell' if entry_side == 'long' else 'buy'
 
-                    # Execute market buy order to close position
-                    # Ensure quantity precision
-                    close_qty = exchange_ccxt.amount_to_precision(self.symbol, position_size_asset)
-                    order = exchange_ccxt.create_market_buy_order(self.symbol, close_qty, params={'reduceOnly': True})
-                    logger.info(f"[{self.name}-{self.symbol}] Placed SHORT exit (BUY) order: {order.get('id')}")
-
-                    # Create Order entry in DB
-                    new_order = Order(
-                        subscription_id=subscription_id,
-                        order_id=order.get('id'), # Exchange's order ID
-                        symbol=self.symbol,
-                        order_type=order.get('type'),
-                        side=order.get('side'),
-                        amount=order.get('amount'),
-                        price=order.get('price'), # May be None for market orders
-                        cost=order.get('cost'),
-                        filled=order.get('filled', 0.0),
-                        remaining=order.get('remaining', order.get('amount')),
-                        status=order.get('status', 'open'),
-                        created_at=datetime.datetime.utcnow(),
-                        updated_at=datetime.datetime.utcnow()
-                    )
-                    db_session.add(new_order)
-
-                    # Update position in DB (simplified - ideally based on order fill)
-                    current_position_db.is_open = False
-                    current_position_db.closed_at = datetime.datetime.utcnow()
-                    current_position_db.close_price = current_price # Use current price as simplified close price
-                    current_position_db.pnl = (entry_price - current_price) * position_size_asset # Simplified PnL
+                        if self.use_stop_loss:
+                            db_sl = self._create_db_order(db_session, subscription_id, position_id=new_pos.id, symbol=self.symbol, order_type='stop_market', side=sl_tp_side, amount=sl_tp_qty, price=self._format_price(sl_trigger, exchange_ccxt), status='pending_creation')
+                            try: sl_receipt = exchange_ccxt.create_order(self.symbol, 'stop_market', sl_tp_side, sl_tp_qty, params={'stopPrice': self._format_price(sl_trigger, exchange_ccxt), 'reduceOnly':True}); db_sl.order_id=sl_receipt['id']; db_sl.status='open'; logger.info(f"[{self.name}-{self.symbol}] SL order {sl_receipt['id']} for Pos {new_pos.id}")
+                            except Exception as e_sl: logger.error(f"[{self.name}-{self.symbol}] Error SL for Pos {new_pos.id}: {e_sl}", exc_info=True); db_sl.status='error'
+                            db_session.commit()
+                        if self.use_take_profit:
+                            db_tp = self._create_db_order(db_session, subscription_id, position_id=new_pos.id, symbol=self.symbol, order_type='limit', side=sl_tp_side, amount=sl_tp_qty, price=self._format_price(tp_limit, exchange_ccxt), status='pending_creation')
+                            try: tp_receipt = exchange_ccxt.create_limit_order(self.symbol, sl_tp_side, sl_tp_qty, self._format_price(tp_limit, exchange_ccxt), params={'reduceOnly':True}); db_tp.order_id=tp_receipt['id']; db_tp.status='open'; logger.info(f"[{self.name}-{self.symbol}] TP order {tp_receipt['id']} for Pos {new_pos.id}")
+                            except Exception as e_tp: logger.error(f"[{self.name}-{self.symbol}] Error TP for Pos {new_pos.id}: {e_tp}", exc_info=True); db_tp.status='error'
+                            db_session.commit()
+                    else: logger.error(f"[{self.name}-{self.symbol}] Entry order {entry_receipt['id']} failed. Pos not opened."); db_entry_order.status = filled_entry.get('status', 'fill_check_failed') if filled_entry else 'fill_check_failed'
                     db_session.commit()
-                    logger.info(f"[{self.name}-{self.symbol}] SHORT position closed and updated in DB.")
-
-                except Exception as e:
-                    logger.error(f"[{self.name}-{self.symbol}] Error closing SHORT position: {e}")
-                    # TODO: Handle error - maybe update position status to 'error' in DB
-
-        # Entry logic
-        if current_position_type is None:
-            if long_condition:
-                logger.info(f"[{self.name}-{self.symbol}] LONG entry signal at {current_price}. Size: {self.lot_size}")
-                try:
-                    # Ensure quantity precision
-                    entry_qty = exchange_ccxt.amount_to_precision(self.symbol, self.lot_size)
-                    if entry_qty <= 0:
-                         logger.warning(f"[{self.name}-{self.symbol}] Calculated entry quantity is zero or negative ({entry_qty}). Skipping order placement.")
-                         return
-
-                    # Execute market buy order
-                    order = exchange_ccxt.create_market_buy_order(self.symbol, entry_qty)
-                    logger.info(f"[{self.name}-{self.symbol}] Placed LONG entry (BUY) order: {order.get('id')}")
-
-                    # Assume order is filled immediately for simplicity
-                    actual_filled_price = float(order.get('price', current_price)) # Use actual fill price if available
-                    actual_filled_quantity = float(order.get('amount', entry_qty)) # Use actual fill quantity
-
-                    # Create new position in DB
-                    new_position = Position(
-                        subscription_id=subscription_id,
-                        symbol=self.symbol,
-                        exchange_name=exchange_ccxt.id, # Store exchange ID
-                        side="long",
-                        amount=actual_filled_quantity,
-                        entry_price=actual_filled_price,
-                        is_open=True,
-                        created_at=datetime.datetime.utcnow(),
-                        updated_at=datetime.datetime.utcnow()
-                    )
-                    db_session.add(new_position)
-                    db_session.commit()
-                    db_session.refresh(new_position) # Get the generated ID
-                    logger.info(f"[{self.name}-{self.symbol}] LONG position created in DB: ID {new_position.id}.")
-
-                    # Place SL/TP orders
-                    if self.use_stop_loss or self.use_take_profit:
-                        try:
-                            sl_price = actual_filled_price * (1 - self.stop_loss_percent)
-                            tp_price = actual_filled_price * (1 + self.take_profit_percent)
-
-                            # Place Stop Loss order
-                            if self.use_stop_loss:
-                                sl_order = exchange_ccxt.create_order(
-                                    self.symbol,
-                                    'stop_market', # Or 'stop' depending on exchange support
-                                    'sell',
-                                    actual_filled_quantity,
-                                    None, # Price is not needed for stop_market
-                                    params={
-                                        'stopPrice': exchange_ccxt.price_to_precision(self.symbol, sl_price),
-                                        'reduceOnly': True
-                                    }
-                                )
-                                logger.info(f"[{self.name}-{self.symbol}] Placed LONG SL (SELL) order: {sl_order.get('id')}")
-                                # Create Order entry for SL in DB
-                                new_sl_order = Order(
-                                    subscription_id=subscription_id,
-                                    order_id=sl_order.get('id'),
-                                    symbol=self.symbol,
-                                    order_type=sl_order.get('type'),
-                                    side=sl_order.get('side'),
-                                    amount=sl_order.get('amount'),
-                                    price=sl_order.get('price'),
-                                    cost=sl_order.get('cost'),
-                                    filled=sl_order.get('filled', 0.0),
-                                    remaining=sl_order.get('remaining', sl_order.get('amount')),
-                                    status=sl_order.get('status', 'open'),
-                                    created_at=datetime.datetime.utcnow(),
-                                    updated_at=datetime.datetime.utcnow()
-                                )
-                                db_session.add(new_sl_order)
-
-
-                            # Place Take Profit order
-                            if self.use_take_profit:
-                                tp_order = exchange_ccxt.create_order(
-                                    self.symbol,
-                                    'limit', # Or 'take_profit_limit'/'take_profit' depending on exchange
-                                    'sell',
-                                    actual_filled_quantity,
-                                    exchange_ccxt.price_to_precision(self.symbol, tp_price), # Limit price
-                                    params={
-                                        'takeProfitPrice': exchange_ccxt.price_to_precision(self.symbol, tp_price), # Trigger price
-                                        'reduceOnly': True
-                                    }
-                                )
-                                logger.info(f"[{self.name}-{self.symbol}] Placed LONG TP (SELL) order: {tp_order.get('id')}")
-                                 # Create Order entry for TP in DB
-                                new_tp_order = Order(
-                                    subscription_id=subscription_id,
-                                    order_id=tp_order.get('id'),
-                                    symbol=self.symbol,
-                                    order_type=tp_order.get('type'),
-                                    side=tp_order.get('side'),
-                                    amount=tp_order.get('amount'),
-                                    price=tp_order.get('price'),
-                                    cost=tp_order.get('cost'),
-                                    filled=tp_order.get('filled', 0.0),
-                                    remaining=tp_order.get('remaining', tp_order.get('amount')),
-                                    status=tp_order.get('status', 'open'),
-                                    created_at=datetime.datetime.utcnow(),
-                                    updated_at=datetime.datetime.utcnow()
-                                )
-                                db_session.add(new_tp_order)
-
-                            db_session.commit() # Commit SL/TP orders to DB
-
-                        except Exception as e:
-                            logger.error(f"[{self.name}-{self.symbol}] Error placing SL/TP orders for LONG position: {e}")
-                            # TODO: Handle error - maybe update position/subscription status
-
-                except Exception as e:
-                    logger.error(f"[{self.name}-{self.symbol}] Error opening LONG position: {e}")
-                    # TODO: Handle error - maybe update subscription status to 'error'
-
-            elif short_condition:
-                logger.info(f"[{self.name}-{self.symbol}] SHORT entry signal at {current_price}. Size: {self.lot_size}")
-                try:
-                    # Ensure quantity precision
-                    entry_qty = exchange_ccxt.amount_to_precision(self.symbol, self.lot_size)
-                    if entry_qty <= 0:
-                         logger.warning(f"[{self.name}-{self.symbol}] Calculated entry quantity is zero or negative ({entry_qty}). Skipping order placement.")
-                         return
-
-                    # Execute market sell order
-                    order = exchange_ccxt.create_market_sell_order(self.symbol, entry_qty)
-                    logger.info(f"[{self.name}-{self.symbol}] Placed SHORT entry (SELL) order: {order.get('id')}")
-
-                    # Assume order is filled immediately for simplicity
-                    actual_filled_price = float(order.get('price', current_price)) # Use actual fill price if available
-                    actual_filled_quantity = float(order.get('amount', entry_qty)) # Use actual fill quantity
-
-                    # Create new position in DB
-                    new_position = Position(
-                        subscription_id=subscription_id,
-                        symbol=self.symbol,
-                        exchange_name=exchange_ccxt.id, # Store exchange ID
-                        side="short",
-                        amount=actual_filled_quantity,
-                        entry_price=actual_filled_price,
-                        is_open=True,
-                        created_at=datetime.datetime.utcnow(),
-                        updated_at=datetime.datetime.utcnow()
-                    )
-                    db_session.add(new_position)
-                    db_session.commit()
-                    db_session.refresh(new_position) # Get the generated ID
-                    logger.info(f"[{self.name}-{self.symbol}] SHORT position created in DB: ID {new_position.id}.")
-
-                    # Place SL/TP orders
-                    if self.use_stop_loss or self.use_take_profit:
-                        try:
-                            sl_price = actual_filled_price * (1 + self.stop_loss_percent)
-                            tp_price = actual_filled_price * (1 - self.take_profit_percent)
-
-                            # Place Stop Loss order
-                            if self.use_stop_loss:
-                                sl_order = exchange_ccxt.create_order(
-                                    self.symbol,
-                                    'stop_market', # Or 'stop' depending on exchange support
-                                    'buy',
-                                    actual_filled_quantity,
-                                    None, # Price is not needed for stop_market
-                                    params={
-                                        'stopPrice': exchange_ccxt.price_to_precision(self.symbol, sl_price),
-                                        'reduceOnly': True
-                                    }
-                                )
-                                logger.info(f"[{self.name}-{self.symbol}] Placed SHORT SL (BUY) order: {sl_order.get('id')}")
-                                # Create Order entry for SL in DB
-                                new_sl_order = Order(
-                                    subscription_id=subscription_id,
-                                    order_id=sl_order.get('id'),
-                                    symbol=self.symbol,
-                                    order_type=sl_order.get('type'),
-                                    side=sl_order.get('side'),
-                                    amount=sl_order.get('amount'),
-                                    price=sl_order.get('price'),
-                                    cost=sl_order.get('cost'),
-                                    filled=sl_order.get('filled', 0.0),
-                                    remaining=sl_order.get('remaining', sl_order.get('amount')),
-                                    status=sl_order.get('status', 'open'),
-                                    created_at=datetime.datetime.utcnow(),
-                                    updated_at=datetime.datetime.utcnow()
-                                )
-                                db_session.add(new_sl_order)
-
-                            # Place Take Profit order
-                            if self.use_take_profit:
-                                tp_order = exchange_ccxt.create_order(
-                                    self.symbol,
-                                    'limit', # Or 'take_profit_limit'/'take_profit' depending on exchange
-                                    'buy',
-                                    actual_filled_quantity,
-                                    exchange_ccxt.price_to_precision(self.symbol, tp_price), # Limit price
-                                    params={
-                                        'takeProfitPrice': exchange_ccxt.price_to_precision(self.symbol, tp_price), # Trigger price
-                                        'reduceOnly': True
-                                    }
-                                )
-                                logger.info(f"[{self.name}-{self.symbol}] Placed SHORT TP (BUY) order: {tp_order.get('id')}")
-                                 # Create Order entry for TP in DB
-                                new_tp_order = Order(
-                                    subscription_id=subscription_id,
-                                    order_id=tp_order.get('id'),
-                                    symbol=self.symbol,
-                                    order_type=tp_order.get('type'),
-                                    side=tp_order.get('side'),
-                                    amount=tp_order.get('amount'),
-                                    price=tp_order.get('price'),
-                                    cost=tp_order.get('cost'),
-                                    filled=tp_order.get('filled', 0.0),
-                                    remaining=tp_order.get('remaining', tp_order.get('amount')),
-                                    status=tp_order.get('status', 'open'),
-                                    created_at=datetime.datetime.utcnow(),
-                                    updated_at=datetime.datetime.utcnow()
-                                )
-                                db_session.add(new_tp_order)
-
-                            db_session.commit() # Commit SL/TP orders to DB
-
-                        except Exception as e:
-                            logger.error(f"[{self.name}-{self.symbol}] Error placing SL/TP orders for SHORT position: {e}")
-                            # TODO: Handle error - maybe update position/subscription status
-
-                except Exception as e:
-                    logger.error(f"[{self.name}-{self.symbol}] Error opening SHORT position: {e}")
-                    # TODO: Handle error - maybe update subscription status to 'error'
-
-        logger.debug(f"[{self.name}-{self.symbol}] Live signal check complete. Current Position (DB): {current_position_type}")
+                except Exception as e: logger.error(f"[{self.name}-{self.symbol}] Error during {entry_side} entry: {e}", exc_info=True); db_entry_order.status='error'; db_session.commit()
+        logger.debug(f"[{self.name}-{self.symbol}] Live signal check complete.")

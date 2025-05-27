@@ -57,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
         await fetchConnectedExchangesSummary();
         await fetchPerformanceSummary();
         await fetchUserReferralStats(); // New function for referral stats
-        await fetchRunningStrategiesStatus(); // Fetch and display running strategies status
+        // await fetchRunningStrategiesStatus(); // Removed: Strategy status will be shown within fetchActiveUserStrategySubscriptions
         await fetchUserPlatformSubscription(); // Fetch and display platform subscription
     }
 
@@ -113,10 +113,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 ul.style.listStyle = 'none'; ul.style.paddingLeft = '0';
                 data.subscriptions.forEach(sub => {
                     const li = document.createElement('li');
-                    // Assuming strategy_name, api_key_id, expires_at are available in the response
+                    // Assuming strategy_name, api_key_id, expires_at, status_message, is_active are available
                     const expiresDate = sub.expires_at ? new Date(sub.expires_at).toLocaleDateString() : 'Never';
-                    li.innerHTML = `<strong>${sub.strategy_name || 'Unnamed Strategy'}</strong> (API Key ID: ${sub.api_key_id || 'N/A'}) - Expires: ${expiresDate}`;
-                    li.style.padding = '5px 0';
+                    const statusText = sub.is_active ? (sub.status_message || 'Running') : (sub.status_message || 'Inactive');
+                    const statusClass = sub.is_active ? 'status-active' : 'status-inactive';
+                    
+                    li.innerHTML = `
+                        <strong>${sub.strategy_name || 'Unnamed Strategy'}</strong> (API Key ID: ${sub.api_key_id || 'N/A'})<br>
+                        Status: <span class="${statusClass}">${statusText}</span><br>
+                        Expires: ${expiresDate}
+                    `;
+                    li.style.padding = '8px 0';
+                    li.style.borderBottom = '1px solid var(--border-color)';
                     ul.appendChild(li);
                 });
                 activeSubscriptionsList.appendChild(ul);

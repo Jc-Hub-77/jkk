@@ -3,82 +3,119 @@ console.log("admin_strategies.js loaded");
 
 document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
-    // const isAdmin = localStorage.getItem('isAdmin') === 'true';
-    // if (!isAdmin || !authToken) { /* Redirect */ }
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+
+    if (!isAdmin && !authToken) { 
+        alert("Access Denied. You are not authorized to view this page or your session has expired.");
+        window.location.href = 'login.html'; 
+        return;
+    }
+     if (!authToken) { 
+        alert("Session expired. Please log in again.");
+        window.location.href = 'login.html';
+        return;
+    }
 
     const strategiesTableBody = document.getElementById('strategiesTableBody');
-    const addNewStrategyBtn = document.querySelector('header.page-header button'); // Assuming one button in header
+    const addNewStrategyBtn = document.querySelector('header.page-header button'); 
 
     async function fetchAdminStrategies() {
         if (!strategiesTableBody) return;
-        strategiesTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading strategies...</td></tr>';
+        strategiesTableBody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Loading strategies...</td></tr>'; // Updated colspan to 7
 
         try {
-            // Conceptual API: GET /api/admin/strategies
-            const response = await fetch('/api/v1/admin/strategies', { headers: { 'Authorization': `Bearer ${authToken}` } });
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json(); // Expects { status, strategies: [...] } (from PREDEFINED_STRATEGIES_METADATA for now)
+            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/strategies`, { 
+                headers: { 'Authorization': `Bearer ${authToken}` } 
+            });
+            if (!response.ok) {
+                if (response.status === 401 || response.status === 403) { window.location.href = 'login.html'; return; }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json(); 
             
             if (data.status === "success" && data.strategies) {
                 strategiesTableBody.innerHTML = '';
                 if (data.strategies.length === 0) {
-                    strategiesTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No strategies defined.</td></tr>';
+                    strategiesTableBody.innerHTML = '<tr><td colspan="7" style="text-align:center;">No strategies defined.</td></tr>';
                     return;
                 }
                 data.strategies.forEach(strategy => {
                     const row = strategiesTableBody.insertRow();
                     row.insertCell().textContent = strategy.id;
                     row.insertCell().textContent = strategy.name;
-                    row.insertCell().textContent = strategy.category;
-                    row.insertCell().textContent = strategy.risk_level;
-                    row.insertCell().textContent = strategy.python_code_path;
+                    row.insertCell().textContent = strategy.category || 'N/A';
+                    row.insertCell().textContent = strategy.risk_level || 'N/A';
+                    row.insertCell().textContent = strategy.python_code_path || 'N/A';
+                    row.insertCell().innerHTML = `<span class="status-${strategy.is_active ? 'active' : 'inactive'}">${strategy.is_active ? 'Active' : 'Inactive'}</span>`;
                     
                     const actionsCell = row.insertCell();
                     const editButton = document.createElement('button');
                     editButton.className = 'btn btn-sm btn-outline';
                     editButton.textContent = 'Edit';
-                    editButton.onclick = () => handleEditStrategy(strategy.id, strategy); // Pass current strategy data
+                    editButton.onclick = () => handleEditStrategyModal(strategy); // Pass full strategy object
                     actionsCell.appendChild(editButton);
-                    // TODO: Add delete/disable buttons if strategies are DB managed
+                    // TODO: Add delete/disable buttons if strategies are DB managed and API supports it
                 });
             } else {
                 throw new Error(data.message || "Failed to parse strategies list.");
             }
         } catch (error) {
             console.error("Error fetching admin strategies:", error);
-            strategiesTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center;">Error loading strategies: ${error.message}</td></tr>`;
+            strategiesTableBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">Error loading strategies: ${error.message}</td></tr>`;
         }
     }
 
-    async function handleEditStrategy(strategyId, currentStrategyData) { // Made async to use await
-        // This would typically open a modal pre-filled with currentStrategyData
-        // For now, just an alert and log.
-        // alert(`Simulating edit for strategy ID: ${strategyId}.\nImplement modal/form for editing details like name, description, category, risk, file path, class name, default parameters JSON.`);
-        // console.log("Current data for editing:", currentStrategyData);
+    function handleEditStrategyModal(strategyData) {
+        // This function would populate and show a modal.
+        // For now, we'll use prompts for a simplified edit.
+        console.log("Editing strategy:", strategyData);
         
-        // On submit from modal:
-        // Assuming you have a way to get updatedData from a form/modal
-        const updatedData = { 
-            name: currentStrategyData.name + " (Edited)", // Placeholder - replace with actual form data
-            description: currentStrategyData.description, // Placeholder
-            python_code_path: currentStrategyData.python_code_path, // Placeholder
-            default_parameters: currentStrategyData.default_parameters, // Placeholder
-            category: currentStrategyData.category, // Placeholder
-            risk_level: currentStrategyData.risk_level // Placeholder
-        };
+        const newName = prompt("Enter new name (or leave blank to keep current):", strategyData.name);
+        const newDescription = prompt("Enter new description (or leave blank):", strategyData.description);
+        const newPythonCodePath = prompt("Enter new Python Code Path (or leave blank):", strategyData.python_code_path);
+        const newDefaultParamsStr = prompt("Enter new Default Parameters (JSON string, or leave blank):", strategyData.default_parameters); // Expects JSON string
+        const newCategory = prompt("Enter new category (or leave blank):", strategyData.category);
+        const newRiskLevel = prompt("Enter new risk level (or leave blank):", strategyData.risk_level);
+        const isActiveStr = prompt("Set active? (true/false, or leave blank):", String(strategyData.is_active));
 
+        const updates = {};
+        if (newName !== null && newName !== strategyData.name) updates.name = newName;
+        if (newDescription !== null && newDescription !== strategyData.description) updates.description = newDescription;
+        if (newPythonCodePath !== null && newPythonCodePath !== strategyData.python_code_path) updates.python_code_path = newPythonCodePath;
+        if (newDefaultParamsStr !== null && newDefaultParamsStr !== strategyData.default_parameters) {
+            try { JSON.parse(newDefaultParamsStr); updates.default_parameters = newDefaultParamsStr; } // Validate JSON
+            catch (e) { alert("Invalid JSON for default parameters. Not updating parameters."); }
+        }
+        if (newCategory !== null && newCategory !== strategyData.category) updates.category = newCategory;
+        if (newRiskLevel !== null && newRiskLevel !== strategyData.risk_level) updates.risk_level = newRiskLevel;
+        if (isActiveStr !== null && isActiveStr !== String(strategyData.is_active)) {
+            updates.is_active = isActiveStr.toLowerCase() === 'true';
+        }
+        
+        if (Object.keys(updates).length > 0) {
+            handleUpdateStrategy(strategyData.id, updates);
+        } else {
+            alert("No changes made.");
+        }
+    }
+    
+    async function handleUpdateStrategy(strategyId, updatedData) {
+        console.log(`Updating strategy ID ${strategyId} with:`, updatedData);
         try {
-           // Conceptual API: PUT /api/admin/strategies/{strategyId}
-           const response = await fetch(`/api/v1/admin/strategies/${strategyId}`, {
+           const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/strategies/${strategyId}`, {
                method: 'PUT',
                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                body: JSON.stringify(updatedData)
            });
            const result = await response.json();
-           if (!response.ok) throw new Error(result.detail || result.message || `HTTP error! status: ${response.status}`);
+           if (!response.ok) {
+                const errorDetail = result.detail || result.message || `HTTP error! status: ${response.status}`;
+                if (Array.isArray(errorDetail)) { throw new Error(errorDetail.map(e => `${e.loc.join('->')}: ${e.msg}`).join(', ')); }
+                throw new Error(errorDetail);
+           }
            
            alert(result.message || "Strategy updated successfully.");
-           fetchAdminStrategies(); // Refresh list
+           fetchAdminStrategies(); 
         } catch (error) { 
             console.error("Error updating strategy:", error);
             alert("Error updating strategy: " + error.message);
@@ -86,32 +123,47 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (addNewStrategyBtn) {
-        addNewStrategyBtn.addEventListener('click', async () => { // Made async to use await
-            // This would open a modal with a form to define a new strategy
-            // alert("Simulating 'Add New Strategy'. Implement form/modal for defining new strategy (name, desc, path, class, category, risk, default_params_json).");
-            // On submit from modal:
-            // Assuming you have a way to get newStrategyData from a form/modal
+        addNewStrategyBtn.addEventListener('click', async () => { 
+            // Simplified: use prompts for new strategy data
+            const name = prompt("Enter Strategy Name:");
+            if (!name) return;
+            const description = prompt("Enter Description:") || "";
+            const python_code_path = prompt("Enter Python Code Path (e.g., my_strategy.py):");
+            if (!python_code_path) return;
+            const default_parameters_str = prompt("Enter Default Parameters (JSON string, e.g., {\"period\": 20}):", "{}");
+            const category = prompt("Enter Category (e.g., Trend, Oscillator):") || "N/A";
+            const risk_level = prompt("Enter Risk Level (e.g., Low, Medium, High):") || "N/A";
+
+            try {
+                JSON.parse(default_parameters_str); // Validate JSON
+            } catch (e) {
+                alert("Invalid JSON for default parameters. Strategy not added.");
+                return;
+            }
+            
             const newStrategyData = { 
-                name: "New Strategy Name", // Placeholder - replace with actual form data
-                description: "Description of new strategy", // Placeholder
-                python_code_path: "path/to/new_strategy.py", // Placeholder
-                default_parameters: {}, // Placeholder - replace with actual form data (JSON object)
-                category: "Custom", // Placeholder
-                risk_level: "Low" // Placeholder
+                name, description, python_code_path, 
+                default_parameters: default_parameters_str, // Send as string
+                category, risk_level,
+                is_active: true // New strategies are active by default
             };
             
+            console.log("Adding new strategy:", newStrategyData);
             try {
-               // Conceptual API: POST /api/admin/strategies
-               const response = await fetch('/api/v1/admin/strategies', {
+               const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/strategies`, {
                    method: 'POST',
                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                    body: JSON.stringify(newStrategyData)
                });
                const result = await response.json();
-               if (!response.ok) throw new Error(result.detail || result.message || `HTTP error! status: ${response.status}`);
+               if (!response.ok) { // Check for non-2xx status codes
+                    const errorDetail = result.detail || result.message || `HTTP error! status: ${response.status}`;
+                    if (Array.isArray(errorDetail)) { throw new Error(errorDetail.map(e => `${e.loc.join('->')}: ${e.msg}`).join(', ')); }
+                    throw new Error(errorDetail);
+               }
                
                alert(result.message || "Strategy added successfully.");
-               fetchAdminStrategies(); // Refresh list
+               fetchAdminStrategies(); 
             } catch (error) { 
                 console.error("Error adding new strategy:", error);
                 alert("Error adding strategy: " + error.message);
@@ -119,5 +171,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    fetchAdminStrategies();
+    if (authToken) { // Only fetch if authenticated
+        fetchAdminStrategies();
+    } else {
+        if (strategiesTableBody) strategiesTableBody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Please login as admin.</td></tr>';
+    }
 });

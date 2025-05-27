@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13-alpine # Using alpine for smaller image size
+    container_name: trading_platform_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user} # Example: load from .env or use default
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-trading_platform}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5432:5432" # Expose PostgreSQL port to host (optional, for direct DB access)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-trading_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:6-alpine # Using alpine for smaller image size
+    container_name: trading_platform_redis
+    ports:
+      - "6379:6379" # Expose Redis port to host (optional)
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.web
+    container_name: trading_platform_web
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./backend:/app # Mount backend code for live reload in development
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env # Load environment variables from .env file
+    depends_on:
+      db:
+        condition: service_healthy # Wait for DB to be healthy
+      redis:
+        condition: service_healthy # Wait for Redis to be healthy
+    environment:
+      # Ensure DATABASE_URL and REDIS_URL in your .env file point to these services
+      # e.g., DATABASE_URL=postgresql://user:password@db:5432/trading_platform
+      #       REDIS_URL=redis://redis:6379/0
+      # These are typically set in the .env file, but shown here for clarity if not using .env directly
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-trading_platform}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - API_ENCRYPTION_KEY=${API_ENCRYPTION_KEY}
+      # Add other necessary env vars from your .env.example
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: trading_platform_worker
+    command: celery -A celery_app.celery_app worker -l info -P gevent
+    volumes:
+      - ./backend:/app # Mount backend code for live reload
+    env_file:
+      - ./backend/.env # Load environment variables from .env file
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-trading_platform}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - API_ENCRYPTION_KEY=${API_ENCRYPTION_KEY}
+      # Add other necessary env vars
+
+volumes:
+  postgres_data:
+  redis_data:
