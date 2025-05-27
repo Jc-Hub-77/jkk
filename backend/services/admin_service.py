@@ -1,14 +1,16 @@
 # backend/services/admin_service.py
 import datetime
 import os
-import logging # Add logging import
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_ # For count, desc, or_
-import sqlalchemy # Move sqlalchemy import to the top
-import sqlalchemy.types # Add sqlalchemy.types import
+import sqlalchemy 
+import sqlalchemy.types 
 import json
-from backend.models import User, Strategy, UserStrategySubscription, PaymentTransaction, ApiKey # Adjusted import path
-from backend.config import settings # Adjusted import path
+import importlib.util # Added for strategy validation
+
+from backend.models import User, Strategy, UserStrategySubscription, PaymentTransaction, ApiKey 
+from backend.config import settings
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -29,11 +31,11 @@ def list_all_users(db_session: Session, page: int = 1, per_page: int = 20, searc
         )
     
     # Sorting
-    sort_column = getattr(User, sort_by, User.id) # Default to User.id if sort_by is invalid
+    sort_column = getattr(User, sort_by, User.id) 
     if sort_order.lower() == "desc":
         query = query.order_by(desc(sort_column))
     else:
-        query = query.order_by(sort_column) # Default to asc
+        query = query.order_by(sort_column) 
 
     total_users = query.count()
     users_data = query.offset((page - 1) * per_page).limit(per_page).all()
@@ -43,10 +45,10 @@ def list_all_users(db_session: Session, page: int = 1, per_page: int = 20, searc
         "users": [{
             "id": u.id, "username": u.username, "email": u.email, 
             "is_admin": u.is_admin, 
-            "is_active": u.is_active, # Include is_active field
+            "is_active": u.is_active, 
             "email_verified": u.email_verified,
             "created_at": u.created_at.isoformat() if u.created_at else None,
-            "profile_full_name": u.profile.full_name if u.profile else None # Example of fetching from related model
+            "profile_full_name": u.profile.full_name if u.profile else None 
         } for u in users_data],
         "total_users": total_users,
         "page": page,
@@ -59,8 +61,6 @@ def set_user_admin_status(db_session: Session, user_id: int, make_admin: bool):
     if not user:
         return {"status": "error", "message": "User not found."}
     
-    # Basic check: prevent removing the last admin if there's a concept of it.
-    # This logic might need to be more sophisticated (e.g. superadmin role)
     if not make_admin and user.is_admin:
         admin_count = db_session.query(User).filter(User.is_admin == True).count()
         if admin_count <= 1:
@@ -69,14 +69,13 @@ def set_user_admin_status(db_session: Session, user_id: int, make_admin: bool):
     user.is_admin = make_admin
     try:
         db_session.commit()
-        logger.info(f"Admin: User {user_id} admin status set to {make_admin}.") # Use logger instead of print
+        logger.info(f"Admin: User {user_id} admin status set to {make_admin}.")
         return {"status": "success", "message": f"User {user_id} admin status updated to {make_admin}."}
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error setting admin status for user {user_id}: {e}", exc_info=True) # Use logger instead of print
+        logger.error(f"Error setting admin status for user {user_id}: {e}", exc_info=True)
         return {"status": "error", "message": f"Database error: {e}"}
 
-# Assuming User model has an 'is_active' field. If not, this function needs adjustment or removal.
 def toggle_user_active_status(db_session: Session, user_id: int, activate: bool):
     """Toggles the active status of a user."""
     user = db_session.query(User).filter(User.id == user_id).first()
@@ -99,8 +98,6 @@ def toggle_user_active_status(db_session: Session, user_id: int, activate: bool)
 
 # --- Admin Strategy Management ---
 def list_all_strategies_admin(db_session: Session):
-    # This will depend on how strategies are stored (DB vs. files in 'strategies/' dir)
-    # If DB:
     try:
         strategies = db_session.query(Strategy).order_by(Strategy.name).all()
         return {
@@ -117,7 +114,7 @@ def list_all_strategies_admin(db_session: Session):
             ]
         }
     except Exception as e:
-        logger.error(f"Error listing strategies for admin: {e}", exc_info=True) # Use logger instead of print
+        logger.error(f"Error listing strategies for admin: {e}", exc_info=True)
         return {"status": "error", "message": "Could not retrieve strategies."}
 
 
@@ -127,15 +124,67 @@ def add_new_strategy_admin(db_session: Session, name: str, description: str, pyt
     if existing_strategy:
         return {"status": "error", "message": f"Strategy with name '{name}' already exists."}
     
-    # Validate python_code_path exists and is a valid strategy file.
-    # Assuming strategies are stored in a directory specified by settings.STRATEGIES_DIR
-    full_path = os.path.join(settings.STRATEGIES_DIR, python_code_path)
-    if not os.path.exists(full_path) or not os.path.isfile(full_path):
-        logger.warning(f"Admin: Attempted to add strategy with invalid path: {python_code_path}")
-        return {"status": "error", "message": f"Strategy file not found at path: {python_code_path}"}
-    # TODO: Add more sophisticated validation for strategy file content (e.g., check for required class/methods)
+    # Note: settings.STRATEGIES_DIR needs to be defined in backend/config.py, 
+    # e.g., STRATEGIES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strategies")
+    # For this example, we assume python_code_path is relative to a base strategy directory.
+    # A more robust solution would define STRATEGIES_DIR in settings.
+    
+    # For demonstration, assume STRATEGIES_DIR is 'backend/strategies'
+    # In a real app, settings.STRATEGIES_DIR should be used.
+    # Ensure this path is correct for your project structure.
+    base_strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "strategies")
+    if not hasattr(settings, 'STRATEGIES_DIR'):
+         logger.warning("Admin: settings.STRATEGIES_DIR is not configured. Using default 'backend/strategies'. Define in config for production.")
+         # Fallback for environments where settings.STRATEGIES_DIR might not be explicitly set.
+         # This path assumes 'services' is one level down from 'backend' and 'strategies' is a sibling to 'services'.
+         # Adjust if your structure is different.
+         effective_strategies_dir = base_strategies_dir
+    else:
+        effective_strategies_dir = settings.STRATEGIES_DIR
 
-    # Validate default_parameters is valid JSON
+
+    full_path = os.path.join(effective_strategies_dir, python_code_path)
+    
+    if not os.path.exists(full_path) or not os.path.isfile(full_path) or not python_code_path.endswith(".py"):
+        logger.warning(f"Admin: Attempted to add strategy with invalid path: {full_path} (based on python_code_path: {python_code_path})")
+        return {"status": "error", "message": f"Strategy file not found or invalid at path: {python_code_path}"}
+
+    # Validate strategy file content
+    try:
+        module_name = os.path.splitext(os.path.basename(python_code_path))[0] # Get filename without .py
+        
+        spec = importlib.util.spec_from_file_location(module_name, full_path)
+        if spec is None or spec.loader is None: # Check both spec and spec.loader
+            logger.warning(f"Admin: Could not create module spec or loader for strategy: {full_path}")
+            return {"status": "error", "message": f"Could not load strategy module from path: {python_code_path}"}
+        
+        strategy_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(strategy_module)
+
+        StrategyClass = None
+        # Common convention: Class name is CamelCase version of file name or simply "Strategy"
+        expected_class_name_1 = "".join(word.capitalize() for word in module_name.split('_')) # my_strategy -> MyStrategy
+        expected_class_name_2 = "Strategy" # General fallback
+
+        if hasattr(strategy_module, expected_class_name_1):
+            StrategyClass = getattr(strategy_module, expected_class_name_1)
+        elif hasattr(strategy_module, expected_class_name_2):
+            StrategyClass = getattr(strategy_module, expected_class_name_2)
+        
+        if StrategyClass is None:
+            logger.warning(f"Admin: Strategy module {python_code_path} does not contain a recognized Strategy class (e.g., {expected_class_name_1} or {expected_class_name_2}).")
+            return {"status": "error", "message": "Strategy module does not conform to expected class naming convention."}
+        
+        # Check for required methods (adjust as per your BaseStrategy or expected interface)
+        required_methods = ['run_backtest', 'execute_live_signal'] 
+        for method_name in required_methods:
+            if not (hasattr(StrategyClass, method_name) and callable(getattr(StrategyClass, method_name))):
+                logger.warning(f"Admin: Strategy class in {python_code_path} does not have required method: {method_name}.")
+                return {"status": "error", "message": f"Strategy class does not have required method: {method_name}."}
+    except Exception as e:
+        logger.error(f"Admin: Error validating strategy file {python_code_path}: {e}", exc_info=True)
+        return {"status": "error", "message": f"Error validating strategy file: {str(e)}"}
+
     try:
         json.loads(default_parameters)
     except json.JSONDecodeError:
@@ -145,20 +194,21 @@ def add_new_strategy_admin(db_session: Session, name: str, description: str, pyt
     new_strategy = Strategy(
         name=name, 
         description=description, 
-        python_code_path=python_code_path,
+        python_code_path=python_code_path, # Store relative path
         default_parameters=default_parameters,
         category=category,
         risk_level=risk_level,
-        is_active=True # New strategies are active by default
+        is_active=True 
     )
     try:
         db_session.add(new_strategy)
         db_session.commit()
         db_session.refresh(new_strategy)
+        logger.info(f"Admin: New strategy '{name}' added with ID {new_strategy.id}.")
         return {"status": "success", "message": "Strategy added successfully.", "strategy_id": new_strategy.id}
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error adding new strategy '{name}': {e}", exc_info=True) # Use logger instead of print
+        logger.error(f"Error adding new strategy '{name}': {e}", exc_info=True)
         return {"status": "error", "message": f"Database error while adding strategy: {e}"}
 
 def update_strategy_admin(db_session: Session, strategy_id: int, updates: dict):
@@ -170,11 +220,20 @@ def update_strategy_admin(db_session: Session, strategy_id: int, updates: dict):
     updated_count = 0
     for key, value in updates.items():
         if key in allowed_fields:
-            # Special handling for name uniqueness if changed
             if key == "name" and value != strategy.name:
                 existing_strategy = db_session.query(Strategy).filter(Strategy.name == value, Strategy.id != strategy_id).first()
                 if existing_strategy:
                     return {"status": "error", "message": f"Another strategy with name '{value}' already exists."}
+            # If python_code_path is updated, re-validate it (similar to add_new_strategy_admin)
+            if key == "python_code_path" and value != strategy.python_code_path:
+                base_strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "strategies")
+                effective_strategies_dir = settings.STRATEGIES_DIR if hasattr(settings, 'STRATEGIES_DIR') else base_strategies_dir
+                full_path = os.path.join(effective_strategies_dir, value)
+                if not os.path.exists(full_path) or not os.path.isfile(full_path) or not value.endswith(".py"):
+                    logger.warning(f"Admin: Attempted to update strategy with invalid path: {full_path}")
+                    return {"status": "error", "message": f"New strategy file not found or invalid at path: {value}"}
+                # (Optional: add full validation logic here as in add_new_strategy_admin if strictness is required on update)
+
             setattr(strategy, key, value)
             updated_count +=1
     
@@ -183,22 +242,23 @@ def update_strategy_admin(db_session: Session, strategy_id: int, updates: dict):
 
     try:
         db_session.commit()
+        logger.info(f"Admin: Strategy {strategy_id} updated.")
         return {"status": "success", "message": "Strategy updated successfully."}
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error updating strategy {strategy_id}: {e}", exc_info=True) # Use logger instead of print
+        logger.error(f"Error updating strategy {strategy_id}: {e}", exc_info=True)
         return {"status": "error", "message": f"Database error while updating strategy: {e}"}
 
 
-# --- Admin Subscriptions & Payments Overview (Placeholders) ---
-# These would require more detailed formatting and potentially complex queries
+# --- Admin Subscriptions & Payments Overview ---
 def list_all_subscriptions_admin(db_session: Session, page: int = 1, per_page: int = 20):
     """Lists all user strategy subscriptions with pagination."""
     try:
-        query = db_session.query(UserStrategySubscription).join(User).join(Strategy)
+        query = db_session.query(UserStrategySubscription).join(User).join(Strategy).outerjoin(ApiKey) # outerjoin for ApiKey
 
         total_subscriptions = query.count()
-        subscriptions_data = query.offset((page - 1) * per_page).limit(per_page).all()
+        # Order by subscription ID descending by default for recent items first
+        subscriptions_data = query.order_by(desc(UserStrategySubscription.id)).offset((page - 1) * per_page).limit(per_page).all()
 
         subscriptions_list = []
         for sub in subscriptions_data:
@@ -209,12 +269,12 @@ def list_all_subscriptions_admin(db_session: Session, page: int = 1, per_page: i
                 "strategy_id": sub.strategy_id,
                 "strategy_name": sub.strategy.name if sub.strategy else None,
                 "api_key_id": sub.api_key_id,
-                # Assuming ApiKey model has a 'name' or identifier field
-                # "api_key_name": sub.api_key.name if sub.api_key else None, # Uncomment if ApiKey has a name field
+                "api_key_label": sub.api_key.label if sub.api_key else None, 
                 "is_active": sub.is_active,
                 "subscribed_at": sub.subscribed_at.isoformat() if sub.subscribed_at else None,
-                "unsubscribed_at": sub.unsubscribed_at.isoformat() if sub.unsubscribed_at else None,
-                "parameters": sub.parameters # Assuming parameters are stored as JSON or similar
+                "expires_at": sub.expires_at.isoformat() if sub.expires_at else None, 
+                "custom_parameters": sub.custom_parameters,
+                "status_message": sub.status_message
             })
 
         return {
@@ -232,10 +292,11 @@ def list_all_subscriptions_admin(db_session: Session, page: int = 1, per_page: i
 def list_all_payments_admin(db_session: Session, page: int = 1, per_page: int = 20):
     """Lists all payment transactions with pagination."""
     try:
-        query = db_session.query(PaymentTransaction).join(User)
+        query = db_session.query(PaymentTransaction).join(User) # Assuming User is always linked
 
         total_payments = query.count()
-        payments_data = query.offset((page - 1) * per_page).limit(per_page).all()
+        # Order by payment ID descending for recent items first
+        payments_data = query.order_by(desc(PaymentTransaction.id)).offset((page - 1) * per_page).limit(per_page).all()
 
         payments_list = []
         for payment in payments_data:
@@ -243,14 +304,15 @@ def list_all_payments_admin(db_session: Session, page: int = 1, per_page: int = 
                 "id": payment.id,
                 "user_id": payment.user_id,
                 "username": payment.user.username if payment.user else None,
-                "amount_usd": float(payment.amount_usd), # Ensure it's a standard number format
-                "currency": payment.currency,
+                "usd_equivalent": float(payment.usd_equivalent) if payment.usd_equivalent is not None else None,
+                "crypto_currency": payment.crypto_currency,
                 "status": payment.status,
-                "transaction_id": payment.transaction_id,
-                "payment_method": payment.payment_method,
+                "gateway_transaction_id": payment.gateway_transaction_id,
+                "payment_gateway": payment.payment_gateway,
                 "created_at": payment.created_at.isoformat() if payment.created_at else None,
                 "updated_at": payment.updated_at.isoformat() if payment.updated_at else None,
-                "metadata": payment.metadata # Assuming metadata is stored as JSON or similar
+                "description": payment.description,
+                "user_strategy_subscription_id": payment.user_strategy_subscription_id
             })
 
         return {
@@ -267,35 +329,55 @@ def list_all_payments_admin(db_session: Session, page: int = 1, per_page: int = 
 
 def get_total_revenue(db_session: Session):
     """Calculates the total revenue from completed payment transactions."""
-    total_revenue = db_session.query(sqlalchemy.func.sum(PaymentTransaction.amount_usd)).filter(
-        PaymentTransaction.status == "completed"
-    ).scalar()
-    return total_revenue if total_revenue is not None else 0.0
+    try:
+        # Ensure the column name matches the model (usd_equivalent)
+        total_revenue = db_session.query(sqlalchemy.func.sum(PaymentTransaction.usd_equivalent)).filter(
+            PaymentTransaction.status == "completed"
+        ).scalar()
+        return total_revenue if total_revenue is not None else 0.0
+    except Exception as e:
+        logger.error(f"Admin: Error calculating total revenue: {e}", exc_info=True)
+        return 0.0 # Return 0 or handle error as appropriate
 
 # --- Admin Site Settings Management (Conceptual) ---
-def get_site_settings_admin(): # Removed db_session as it's reading env vars mostly
-    # Sensitive settings should always come from env or secure config store
+def get_site_settings_admin(): 
     settings_dict = {
        "PROJECT_NAME": settings.PROJECT_NAME,
        "PROJECT_VERSION": settings.PROJECT_VERSION,
-       "DATABASE_URL_CONFIGURED": bool(settings.DATABASE_URL), # Don't expose the URL itself
-       "JWT_SECRET_KEY_SET": settings.JWT_SECRET_KEY != "a_very_secure_default_secret_key_please_change_me", # Check if default
+       "DATABASE_URL_CONFIGURED": bool(settings.DATABASE_URL), 
+       "JWT_SECRET_KEY_SET": settings.JWT_SECRET_KEY != "a_very_secure_default_secret_key_please_change_me", 
+       "API_ENCRYPTION_KEY_SET": bool(settings.API_ENCRYPTION_KEY),
        "SMTP_HOST": settings.SMTP_HOST or "Not Set",
        "EMAILS_FROM_EMAIL": settings.EMAILS_FROM_EMAIL or "Not Set",
        "FRONTEND_URL": settings.FRONTEND_URL,
        "ALLOWED_ORIGINS": settings.ALLOWED_ORIGINS,
+       "REFERRAL_COMMISSION_RATE": settings.REFERRAL_COMMISSION_RATE,
+       "COINBASE_COMMERCE_API_KEY_SET": bool(settings.COINBASE_COMMERCE_API_KEY),
        "ENVIRONMENT": os.getenv("ENVIRONMENT", "Not Set")
-       # Add other relevant non-sensitive settings or status of sensitive ones
     }
     return {"status": "success", "settings": settings_dict}
 
-# Updating site settings via API is generally discouraged for anything sensitive.
-# This function remains a placeholder and should be used with extreme caution.
 def update_site_setting_admin(setting_key: str, setting_value: str):
-    # This is highly conceptual. Modifying runtime config or .env via API is risky.
-    # Best practice is to manage config via deployment process / env variables.
-    if setting_key in ["DATABASE_URL", "JWT_SECRET_KEY", "SMTP_PASSWORD"]:
-         return {"status": "error", "message": f"Setting '{setting_key}' is sensitive and cannot be updated via API."}
+    # This remains conceptual as modifying .env or runtime os.environ is complex and risky via API.
+    # Such changes should ideally trigger a configuration reload or app restart,
+    # which is beyond the scope of this function.
+    sensitive_keys = [
+        "DATABASE_URL", "JWT_SECRET_KEY", "SMTP_PASSWORD", 
+        "API_ENCRYPTION_KEY", "COINBASE_COMMERCE_API_KEY", "COINBASE_COMMERCE_WEBHOOK_SECRET"
+    ]
+    if setting_key in sensitive_keys:
+         logger.warning(f"Admin: Attempt to update sensitive setting '{setting_key}' via API was blocked.")
+         return {"status": "error", "message": f"Setting '{setting_key}' is sensitive and cannot be updated via API for security reasons."}
     
-    logger.info(f"Admin: Simulated attempt to update site setting '{setting_key}' to '{setting_value}'. This is not implemented for security.") # Use logger instead of print
-    return {"status": "info_simulated", "message": f"Updating setting '{setting_key}' is conceptual and not directly implemented for runtime changes."}
+    # Example: For non-sensitive, known settings that might be stored in DB or a mutable config object (not .env)
+    # if setting_key == "SOME_NON_SENSITIVE_SETTING":
+    #    try:
+    #        # Update logic here (e.g., save to a DB table for settings)
+    #        logger.info(f"Admin: Site setting '{setting_key}' updated to '{setting_value}'.")
+    #        return {"status": "success", "message": f"Setting '{setting_key}' updated."}
+    #    except Exception as e:
+    #        logger.error(f"Admin: Error updating site setting '{setting_key}': {e}", exc_info=True)
+    #        return {"status": "error", "message": f"Could not update setting '{setting_key}': {e}"}
+
+    logger.info(f"Admin: Simulated attempt to update site setting '{setting_key}' to '{setting_value}'. This is not implemented for direct .env modification.")
+    return {"status": "info_simulated", "message": f"Updating setting '{setting_key}' is conceptual. Direct modification of environment variables at runtime is not supported through this function."}

@@ -230,6 +230,7 @@ def run_live_strategy(self, user_sub_id: int):
 
 @celery_app.task(bind=True)
 def run_backtest_task(self,
+                      backtest_result_id: int, # Added backtest_result_id
                       user_id: int,
                       strategy_id: int,
                       custom_parameters: dict,
@@ -251,6 +252,7 @@ def run_backtest_task(self,
         # Call the core backtesting logic
         result = _perform_backtest_logic(
             db_session=db_session,
+            backtest_result_id=backtest_result_id, # Pass backtest_result_id
             user_id=user_id,
             strategy_id=strategy_id,
             custom_parameters=custom_parameters,

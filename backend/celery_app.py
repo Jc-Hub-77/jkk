@@ -23,7 +23,7 @@ celery_app.conf.update(
 )
 
 # Auto-discover tasks in the 'tasks' module (we will create this later)
-# celery_app.autodiscover_tasks(['backend.tasks'])
+celery_app.autodiscover_tasks(['backend.tasks'])
 
 if __name__ == '__main__':
     celery_app.start()
