@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             // ASSUMED BACKEND ENDPOINT: /api/v1/admin/subscriptions (needs to be created in admin_router.py)
             // This endpoint would call admin_service.list_all_subscriptions_admin
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/all-subscriptions?${queryParams}`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/all-subscriptions?${queryParams}`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
 
@@ -150,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         try {
             // ASSUMED BACKEND ENDPOINT: PUT /api/v1/admin/subscriptions/{sub_id}/details 
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/subscriptions/${subData.id}/details`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/subscriptions/${subData.id}/details`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 body: JSON.stringify(payload)
@@ -171,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // ASSUMED BACKEND ENDPOINT: POST /api/v1/admin/subscriptions/{subscription_id}/deactivate
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/subscriptions/${subscriptionId}/deactivate`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/subscriptions/${subscriptionId}/deactivate`, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });

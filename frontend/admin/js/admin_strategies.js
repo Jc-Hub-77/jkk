@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
         strategiesTableBody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Loading strategies...</td></tr>'; // Updated colspan to 7
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/strategies`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/strategies`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {
@@ -102,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleUpdateStrategy(strategyId, updatedData) {
         console.log(`Updating strategy ID ${strategyId} with:`, updatedData);
         try {
-           const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/strategies/${strategyId}`, {
+           const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/strategies/${strategyId}`, {
                method: 'PUT',
                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                body: JSON.stringify(updatedData)
@@ -150,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             console.log("Adding new strategy:", newStrategyData);
             try {
-               const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/strategies`, {
+               const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/strategies`, {
                    method: 'POST',
                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                    body: JSON.stringify(newStrategyData)

@@ -19,12 +19,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchSiteSettings() {
         console.log("Fetching site settings...");
-        console.log("Fetching site settings...");
         if (!coinbaseApiKeyStatusElem) { console.log("Settings page elements not found"); return; } // Ensure elements exist
 
         try {
             // Conceptual API: GET /api/admin/settings
-            const response = await fetch('/api/v1/admin/site-settings', { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/site-settings`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -90,7 +89,12 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 // Conceptual API: POST /api/admin/settings (can send multiple updates or one by one)
                 // For simplicity, let's assume a single endpoint that takes a list of updates
-                // const response = await fetch('/api/admin/settings', { 
+                // For this conceptual example, we don't have a backend endpoint to update these settings directly via a generic API.
+                // The instruction was to make BACKEND_API_BASE_URL configurable for *fetching*.
+                // Actual update logic for these specific settings would need dedicated backend endpoints,
+                // which are not part of this task. This part remains simulated.
+                
+                // const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/site-settings`, { 
                 //     method: 'POST', 
                 //     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 //     body: JSON.stringify({settings: settingsToUpdate}) // Send as a list of key-value pairs

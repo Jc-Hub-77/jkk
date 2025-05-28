@@ -1,4 +1,6 @@
 # backend/api/v1/auth_router.py
+import datetime # Added for 'iat' check
+import logging # Added for logging
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -11,6 +13,7 @@ from ...config import settings
 from ...db import get_db # Changed to import from backend.db
 
 router = APIRouter()
+logger = logging.getLogger(__name__) # Initialize logger
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login") # Points to our login endpoint
 
@@ -27,26 +30,52 @@ async def get_current_user(
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id_str: str = payload.get("sub") # "sub" should contain the user_id as a string
         if user_id_str is None:
+            logger.warning("Token missing 'sub' (user_id) claim.")
             raise credentials_exception
         
         # Ensure user_id_str can be converted to int
         try:
             user_id = int(user_id_str)
         except ValueError:
+            logger.warning(f"Invalid user_id format in token's 'sub' claim: {user_id_str}")
             raise credentials_exception
 
         token_data = user_schemas.TokenData(user_id=user_id, username=payload.get("username"))
-    except JWTError:
+    except JWTError as e:
+        logger.warning(f"JWTError decoding token: {e}")
         raise credentials_exception
     
     user = user_service.get_user_by_id(db, user_id=token_data.user_id)
     if user is None:
+        logger.warning(f"User ID {token_data.user_id} from token not found in DB.")
         raise credentials_exception
+
+    # Check for session invalidation due to password change
+    token_iat_claim = payload.get("iat")
+    if not isinstance(token_iat_claim, (int, float)): # PyJWT usually decodes 'iat' to numeric timestamp
+        logger.error(f"Token for user {user.id} has 'iat' claim in unexpected format or missing: {token_iat_claim}")
+        raise credentials_exception 
+
+    token_issued_datetime = datetime.datetime.utcfromtimestamp(token_iat_claim)
+
+    if user.last_password_change_at:
+        # Ensure last_password_change_at is timezone-aware (UTC) or compare naive to naive UTC datetimes
+        # Assuming last_password_change_at is stored as UTC datetime
+        if token_issued_datetime < user.last_password_change_at:
+            logger.info(f"Token for user {user.id} (issued at {token_issued_datetime}) was issued before last password change ({user.last_password_change_at}). Denying access.")
+            raise credentials_exception # Token is considered revoked
+            
     return user
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.email_verified or not current_user.is_active: # Check both email verification and active status
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user, email not verified, or account deactivated")
+        detail_message = "Inactive user"
+        if not current_user.email_verified:
+            detail_message = "Email not verified"
+        elif not current_user.is_active:
+            detail_message = "Account deactivated"
+        logger.warning(f"Access denied for user {current_user.id}: {detail_message}.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail_message)
     return current_user
 
 # --- Authentication Endpoints ---
@@ -119,7 +148,7 @@ async def update_current_user_profile(
     db: Session = Depends(get_db)
 ):
     # Convert Pydantic model to dict for the service function
-    update_data_dict = profile_update.dict(exclude_unset=True) 
+    update_data_dict = profile_update.model_dump(exclude_unset=True) # Use model_dump for Pydantic v2
     if not update_data_dict: # If nothing to update
          raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No update data provided.")
 
@@ -149,41 +178,42 @@ async def change_current_user_password(
     return result
 
 @router.post("/resend-verification-email", response_model=user_schemas.GeneralResponse)
-async def resend_verification_email(email: str, db: Session = Depends(get_db)):
+async def resend_verification_email(email_body: user_schemas.EmailRequest, db: Session = Depends(get_db)): # Changed to accept EmailRequest model
     """
     Resends the email verification token to the user.
     """
-    result = user_service.resend_verification_email(db_session=db, email=email)
+    result = user_service.request_new_verification_email(db_session=db, email=email_body.email) # Corrected call
     if result["status"] == "error":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
     return result
 
 @router.post("/forgot-password", response_model=user_schemas.GeneralResponse)
-async def forgot_password(email: str, db: Session = Depends(get_db)):
-    result = user_service.forgot_password(db_session=db, email=email)
+async def forgot_password_request_endpoint(email_body: user_schemas.EmailRequest, db: Session = Depends(get_db)): # Changed name and param
+    result = user_service.forgot_password_request(db_session=db, email=email_body.email) # Corrected call
     if result["status"] == "error":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
     return result
 
-@router.post("/request-password-reset", response_model=user_schemas.GeneralResponse)
-async def request_password_reset(email: str, db: Session = Depends(get_db)):
-    """
-    Requests a password reset token to be sent to the user's email.
-    """
-    result = user_service.request_password_reset(db_session=db, email=email)
-    if result["status"] == "error":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
-    return result
+# This endpoint was removed from the latest user_service.py, keeping `forgot_password_request` from above.
+# @router.post("/request-password-reset", response_model=user_schemas.GeneralResponse)
+# async def request_password_reset(email: str, db: Session = Depends(get_db)):
+#     """
+#     Requests a password reset token to be sent to the user's email.
+#     """
+#     result = user_service.request_password_reset(db_session=db, email=email)
+#     if result["status"] == "error":
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
+#     return result
 
 @router.post("/reset-password", response_model=user_schemas.GeneralResponse)
-async def reset_password(
+async def reset_password_endpoint( # Changed name
     reset_data: user_schemas.PasswordReset,
     db: Session = Depends(get_db)
 ):
     """
     Resets the user's password using a valid token.
     """
-    result = user_service.reset_password(
+    result = user_service.reset_password_with_token( # Corrected call
         db_session=db,
         token=reset_data.token,
         new_password=reset_data.new_password

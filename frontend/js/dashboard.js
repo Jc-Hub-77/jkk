@@ -1,7 +1,7 @@
 // frontend/js/dashboard.js
 console.log("dashboard.js loaded");
 
-const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000';
+// const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // This will now be set globally via HTML script tag
 
 document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchUserProfile() {
         if (!dashUsername || !dashEmail) return;
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/auth/users/me`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/auth/users/me`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status, username, email, ... }
 
@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dashOverallPnl || !dashActiveBots) return;
         try {
             // Corrected API path
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/performance-summary`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/performance-summary`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status, overall_pnl_30d, active_bots_count, ... }
 
@@ -103,7 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
         activeSubscriptionsList.innerHTML = '<p>Loading active subscriptions...</p>';
         try {
             // Corrected API path
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/strategy_subscriptions`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/strategy_subscriptions`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status, subscriptions: [...] }
 
@@ -142,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dashExchangeList.innerHTML = '<li>Loading connected exchanges...</li>';
         try {
             // Corrected API path - fetching all keys for the user
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchanges/api-keys`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchanges/api-keys`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status, keys: [...] }
 
@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!userReferralCodeElem) return; // Check if referral section elements exist
         try {
             // Corrected API path
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/referral-stats`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/referral-stats`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status, referral_code, total_referrals, ... }
 
@@ -202,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Corrected API path
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/live_trading/strategies/status`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/live_trading/strategies/status`, {
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -227,7 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
          if (!dashSubPlanMain || !dashSubExpiryMain) return;
          try {
              // Corrected API path
-             const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/platform_subscription`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+             const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/platform_subscription`, { headers: { 'Authorization': `Bearer ${authToken}` } });
              if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
              const data = await response.json(); // Expects { status, subscription: { plan_name, is_active, expires_at } }
 

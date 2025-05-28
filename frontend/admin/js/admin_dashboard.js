@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         try {
             // Fetch data from the new backend endpoint
-            const response = await fetch('/api/v1/admin/dashboard-summary', {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/dashboard-summary`, {
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
 

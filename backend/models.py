@@ -28,6 +28,7 @@ class User(Base):
     password_reset_token = Column(String, unique=True, nullable=True) # Add password reset token field
     password_reset_token_expires_at = Column(DateTime, nullable=True) # Add password reset token expiry field
     is_active = Column(Boolean, default=True) # Add is_active field
+    last_password_change_at = Column(DateTime, nullable=True, default=None)
 
     profile = relationship("Profile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
