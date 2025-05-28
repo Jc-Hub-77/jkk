@@ -48,6 +48,57 @@ docker-compose down
 docker-compose logs -f <service_name> # e.g., web, worker
 ```
 
+## Production Deployment with Docker Compose (`docker-compose.prod.yml`)
+
+For production or production-like staging environments, a separate Docker Compose file, `docker-compose.prod.yml`, is provided. This configuration is optimized for security and production best practices.
+
+**Key Differences from `docker-compose.yml` (Development):**
+
+*   **No Source Code Volume Mounts:** Services use the code baked into their Docker images during the build process (e.g., `docker-compose -f docker-compose.prod.yml build web worker`). This ensures that the deployed code is exactly what was tested and built.
+*   **Externalized Environment Variables:** Configuration relies entirely on environment variables provided by the deployment platform or CI/CD system. The `.env` file is NOT used. This is crucial for security and flexibility.
+    *   **Critical Variables to Set Externally:**
+        *   `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+        *   `JWT_SECRET_KEY` (must be strong and unique)
+        *   `API_ENCRYPTION_KEY` (must be strong and unique for encrypting exchange API keys)
+        *   `FRONTEND_URL` (e.g., `https://yourdomain.com`)
+        *   `ALLOWED_ORIGINS` (e.g., `https://yourdomain.com,https://www.yourdomain.com`)
+        *   `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAILS_FROM_EMAIL` (for email notifications)
+        *   `COINBASE_COMMERCE_API_KEY`, `COINBASE_COMMERCE_WEBHOOK_SECRET` (if using Coinbase Commerce)
+        *   `STRATEGIES_DIR` (if strategies are not located at `/app/strategies` within the image)
+        *   `GUNICORN_WORKERS` (e.g., `4`)
+        *   `CELERY_CONCURRENCY` (e.g., `8` per worker instance, as used in `backend/Dockerfile.worker`)
+        *   `CELERY_WORKER_REPLICAS` (e.g., `2` for Docker Swarm scaling, defined in `docker-compose.prod.yml` under `worker.deploy.replicas`)
+        *   `ENVIRONMENT` (should be set to `production`)
+*   **Gunicorn for Web Service:** The `web` service (backend API) is managed by Gunicorn, as configured in `docker-compose.prod.yml` and `backend/Dockerfile.web`. Gunicorn acts as a process manager for Uvicorn workers, enhancing scalability and robustness for production. Key Gunicorn settings (like number of workers, worker class, timeouts) can be configured via `backend/gunicorn_conf.py` and overridden by environment variables (e.g., `GUNICORN_WORKERS`).
+*   **Celery Worker Scaling:**
+    *   **Concurrency per Worker:** The number of concurrent tasks each Celery worker process can handle is defined by the `CELERY_CONCURRENCY` environment variable. This is used in the `CMD` of `backend/Dockerfile.worker` (e.g., `${CELERY_CONCURRENCY:-4}`).
+    *   **Number of Worker Instances (Replicas):** For environments like Docker Swarm, the number of `worker` service replicas (instances) can be scaled using the `deploy: replicas:` setting in `docker-compose.prod.yml`. This allows you to run multiple Celery worker containers, each potentially handling `CELERY_CONCURRENCY` tasks.
+*   **Restricted Port Exposure:** Database (`db`) and Redis (`redis`) services do not expose their ports to the host by default. They are accessible within the Docker internal network. The `web` service exposes its port `8000` only on `127.0.0.1` by default, expecting a reverse proxy (like Nginx) to manage public access.
+*   **Separate Production Volumes:** Uses `postgres_data_prod` and `redis_data_prod` for persistent data, keeping production data separate from development.
+
+**Running with `docker-compose.prod.yml`:**
+
+```bash
+# Build and start all services in detached mode using the production configuration
+docker-compose -f docker-compose.prod.yml up -d --build
+
+# Stop services
+docker-compose -f docker-compose.prod.yml down
+
+# View logs
+docker-compose -f docker-compose.prod.yml logs -f <service_name>
+```
+
+**Secrets Management:**
+
+While `docker-compose.prod.yml` expects secrets to be passed as environment variables, this approach might not be suitable for all production environments if the platform does not offer secure injection of these variables.
+Refer to `backend/SECRETS.MD` for more comprehensive recommendations on secrets management, such as using:
+*   Cloud provider secrets management services (e.g., AWS Secrets Manager, Google Secret Manager, Azure Key Vault).
+*   HashiCorp Vault.
+*   Docker Swarm secrets or Kubernetes Secrets.
+
+It is critical to ensure that sensitive data like `JWT_SECRET_KEY` and `API_ENCRYPTION_KEY` are generated securely and managed appropriately throughout their lifecycle. The `ENVIRONMENT: production` setting in `docker-compose.prod.yml` enables stricter checks in `backend/config.py` for these critical variables.
+
 ## Frontend Deployment
 
 The frontend is a static application located in the `frontend/` directory. It needs to be served by a web server like Nginx or Apache, or hosted on a static site hosting service (e.g., Netlify, Vercel, AWS S3 + CloudFront).
@@ -144,41 +195,34 @@ Nginx can be installed directly on the VPS host to serve the static frontend fil
 
 ### 4. Configuring `window.BACKEND_API_BASE_URL` in Production
 
-The frontend needs to know where to send API requests. The inline script added to each HTML file:
-```html
-<script>
-  window.BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // Default for local dev
-</script>
+The frontend needs to know where to send API requests. This is managed centrally via the `frontend/js/config.js` file.
+
+**Production Configuration (Standard):**
+For production deployments, especially when using a reverse proxy like Nginx (as detailed in the "Frontend Deployment with Nginx" section) to serve the frontend and proxy API calls (e.g., under the `/api/v1/` path) from the same domain, `window.BACKEND_API_BASE_URL` in `frontend/js/config.js` **must be an empty string**:
+```javascript
+// frontend/js/config.js
+// Correct for production with a reverse proxy on the same domain:
+window.BACKEND_API_BASE_URL = ""; 
 ```
-needs to be adjusted for a production VPS deployment.
+This setup ensures that all frontend API calls use relative paths (e.g., `fetch('/api/v1/auth/login')`). The reverse proxy (Nginx) is then responsible for correctly routing these requests to the backend service (e.g., `http://127.0.0.1:8000` as per `docker-compose.prod.yml`). This is the standard and most secure method.
 
-- **If using Nginx as a reverse proxy (as shown above) to serve the frontend and proxy API calls under the same domain:**
-  The most straightforward approach is to set `window.BACKEND_API_BASE_URL = "";` (an empty string). This makes all frontend API calls use relative paths (e.g., `/api/v1/auth/login`). Nginx will then correctly route these requests to the backend service based on the `location /api/v1/` block.
-  Modify the inline script in **all HTML files** in your deployment package (e.g., in `/var/www/trading_platform_frontend/`) to:
-  ```html
-  <script>
-    window.BACKEND_API_BASE_URL = ""; 
-  </script>
-  ```
-  This change can be done manually post-copying files to the VPS, or automated as part of a build/deployment script.
+**Local Development or Different Domains:**
+For local development, or if the backend API is hosted on a completely different domain or port than the frontend in production (not recommended for simplicity and to avoid CORS complexities if possible), `frontend/js/config.js` would be temporarily modified:
+```javascript
+// Example for local development (backend on port 8000):
+// window.BACKEND_API_BASE_URL = "http://127.0.0.1:8000";
 
-- **Alternative: Using a `config.js` file (more structured):**
-  1. Create a file `frontend/js/config.js` with the content:
-     ```javascript
-     // frontend/js/config.js
-     window.BACKEND_API_BASE_URL = ""; // For production with Nginx proxy as described
-     // Or, if frontend and backend are on different subdomains/ports and not using the /api/v1 proxy path directly:
-     // window.BACKEND_API_BASE_URL = "https://api.yourdomain.com"; 
-     // window.BACKEND_API_BASE_URL = "https://yourdomain.com:8000"; // If exposing backend directly on a port (not recommended for production)
-     ```
-  2. In your production deployment, ensure this `config.js` file has the correct production URL.
-  3. Modify all HTML files to remove the inline `<script>window.BACKEND_API_BASE_URL = ...</script>` and instead include:
-     ```html
-     <script src="js/config.js"></script> 
-     ```
-     This `<script>` tag for `config.js` should be placed **before** any other JavaScript files that rely on `window.BACKEND_API_BASE_URL` (e.g., `auth.js`, `dashboard.js`). Typically, this would be in the `<head>` element or at the very beginning of the `<body>`.
+// Example if API is on a different subdomain in production:
+// window.BACKEND_API_BASE_URL = "https://api.yourdomain.com";
+```
+**Crucial Note:** The version of `frontend/js/config.js` committed to your version control system (e.g., Git) should **always** have `window.BACKEND_API_BASE_URL = "";`. This ensures that deployments default to the correct production-ready configuration. Developers should only change this locally for their specific needs and avoid committing such changes.
 
-  For this project's current setup (with inline scripts already added), modifying the inline script is the direct path. The `config.js` approach is a good practice for future enhancements or more complex configurations.
+**HTML File Integration:**
+All HTML files across the `frontend/` and `frontend/admin/` directories have been standardized to include the `config.js` script within their `<head>` section. This script tag is placed before any other application-specific JavaScript files that depend on `window.BACKEND_API_BASE_URL`.
+- For files directly in `frontend/`: `<script src="js/config.js"></script>`
+- For files in `frontend/admin/`: `<script src="../js/config.js"></script>`
+
+This centralized `config.js` approach simplifies managing the backend API URL across different environments and is critical for a smooth production deployment.
 
 ### 5. Firewall and Security
 

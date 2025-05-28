@@ -15,3 +15,5 @@ cryptography
 
 celery
 redis
+gunicorn
+pytest

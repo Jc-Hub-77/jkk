@@ -37,4 +37,5 @@ EXPOSE 8000
 # Add --reload for development if desired, but typically not for production images.
 # CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 # Using a script for startup to potentially include migrations or other checks
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+# CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && gunicorn -k uvicorn.workers.UvicornWorker -c /app/gunicorn_conf.py main:app"]
