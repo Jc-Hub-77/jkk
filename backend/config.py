@@ -54,8 +54,23 @@ class Settings:
     APP_PAYMENT_SUCCESS_URL: str = os.getenv("APP_PAYMENT_SUCCESS_URL", f"{FRONTEND_URL}/payment/success")
     APP_PAYMENT_CANCEL_URL: str = os.getenv("APP_PAYMENT_CANCEL_URL", f"{FRONTEND_URL}/payment/cancel")
 
+    # Directory for strategies
+    STRATEGIES_DIR: Optional[str] = os.getenv("STRATEGIES_DIR")
+
 
 settings = Settings()
+
+if not settings.STRATEGIES_DIR:
+    # Fallback for development if not set, assuming 'strategies' dir is one level above 'backend'
+    # For production, this should be explicitly set.
+    strategies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "strategies")
+    if os.path.isdir(strategies_path):
+        settings.STRATEGIES_DIR = strategies_path
+    else:
+        # If neither env var nor default path exists, raise error or log warning
+        # For now, let's log a warning, consistent with how API_ENCRYPTION_KEY is handled if missing (though that one is critical)
+        print("WARNING: STRATEGIES_DIR environment variable is not set and default path not found.")
+        # settings.STRATEGIES_DIR = None # Or some other default if appropriate
 
 # Ensure JWT_SECRET_KEY is not the default in a production-like environment
 if settings.JWT_SECRET_KEY == "a_very_secure_default_secret_key_please_change_me" and os.getenv("ENVIRONMENT") == "production":

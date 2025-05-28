@@ -151,24 +151,10 @@ def add_new_strategy_admin(db_session: Session, name: str, description: str, pyt
     if existing_strategy:
         return {"status": "error", "message": f"Strategy with name '{name}' already exists."}
     
-    # Note: settings.STRATEGIES_DIR needs to be defined in backend/config.py, 
-    # e.g., STRATEGIES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strategies")
-    # For this example, we assume python_code_path is relative to a base strategy directory.
-    # A more robust solution would define STRATEGIES_DIR in settings.
-    
-    # For demonstration, assume STRATEGIES_DIR is 'backend/strategies'
-    # In a real app, settings.STRATEGIES_DIR should be used.
-    # Ensure this path is correct for your project structure.
-    base_strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "strategies")
-    if not hasattr(settings, 'STRATEGIES_DIR'):
-         logger.warning("Admin: settings.STRATEGIES_DIR is not configured. Using default 'backend/strategies'. Define in config for production.")
-         # Fallback for environments where settings.STRATEGIES_DIR might not be explicitly set.
-         # This path assumes 'services' is one level down from 'backend' and 'strategies' is a sibling to 'services'.
-         # Adjust if your structure is different.
-         effective_strategies_dir = base_strategies_dir
-    else:
-        effective_strategies_dir = settings.STRATEGIES_DIR
-
+    if not settings.STRATEGIES_DIR:
+        logger.error("Admin: STRATEGIES_DIR is not configured in settings. Cannot add strategy.")
+        return {"status": "error", "message": "System configuration error: STRATEGIES_DIR not set."}
+    effective_strategies_dir = settings.STRATEGIES_DIR
 
     full_path = os.path.join(effective_strategies_dir, python_code_path)
     
@@ -251,10 +237,13 @@ def update_strategy_admin(db_session: Session, strategy_id: int, updates: dict):
                 existing_strategy = db_session.query(Strategy).filter(Strategy.name == value, Strategy.id != strategy_id).first()
                 if existing_strategy:
                     return {"status": "error", "message": f"Another strategy with name '{value}' already exists."}
-            # If python_code_path is updated, re-validate it (similar to add_new_strategy_admin)
+            
             if key == "python_code_path" and value != strategy.python_code_path:
-                base_strategies_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "strategies")
-                effective_strategies_dir = settings.STRATEGIES_DIR if hasattr(settings, 'STRATEGIES_DIR') else base_strategies_dir
+                if not settings.STRATEGIES_DIR:
+                    logger.error("Admin: STRATEGIES_DIR is not configured in settings. Cannot update strategy path.")
+                    return {"status": "error", "message": "System configuration error: STRATEGIES_DIR not set."}
+                effective_strategies_dir = settings.STRATEGIES_DIR
+                
                 full_path = os.path.join(effective_strategies_dir, value)
                 if not os.path.exists(full_path) or not os.path.isfile(full_path) or not value.endswith(".py"):
                     logger.warning(f"Admin: Attempted to update strategy with invalid path: {full_path}")

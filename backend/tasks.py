@@ -6,6 +6,8 @@ import os
 import importlib.util
 import logging
 import pandas as pd # Added for DataFrame conversion
+import smtplib # Added for email
+from email.mime.text import MIMEText # Added for email
 
 from sqlalchemy.orm import Session
 from backend.celery_app import celery_app
@@ -244,3 +246,42 @@ def run_backtest_task(self, backtest_result_id: int, user_id: int, strategy_id: 
     finally:
         if db_session: db_session.close()
         logger.info(f"Backtest task {self.request.id} for BR_ID {backtest_result_id} finished processing.")
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_email_task(self, to_email: str, subject:str, body: str):
+    logger.info(f"Celery task send_email_task received for {to_email} with subject '{subject}'")
+    if not settings.SMTP_HOST or not settings.SMTP_USER or not settings.SMTP_PASSWORD or not settings.EMAILS_FROM_EMAIL:
+        logger.warning(f"Email not sent by Celery task to {to_email}: SMTP settings not fully configured. Simulating email.")
+        logger.info(f"--- Celery Simulated Email to {to_email} ---")
+        logger.info(f"Subject: {subject}")
+        logger.info(f"Body:\n{body}")
+        logger.info(f"--- End of Celery Simulated Email ---")
+        return {"status": "warning_simulated", "message": "Email settings not configured; email simulated by Celery."}
+
+    try:
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = settings.EMAILS_FROM_EMAIL
+        msg['To'] = to_email
+
+        smtp_port = settings.SMTP_PORT if settings.SMTP_PORT is not None else 587
+
+        with smtplib.SMTP(settings.SMTP_HOST, smtp_port) as server:
+            if settings.SMTP_TLS:
+                server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.EMAILS_FROM_EMAIL, to_email, msg.as_string())
+        
+        logger.info(f"Celery task successfully sent email to {to_email} with subject '{subject}'.")
+        return {"status": "success", "message": "Email sent successfully by Celery."}
+    except Exception as e:
+        logger.error(f"Celery task failed to send email to {to_email}: {e}", exc_info=True)
+        # Retry the task if it's a known transient error, otherwise let it fail
+        # For SMTP, connection errors or temporary auth issues might be retried.
+        try:
+            self.retry(exc=e)
+        except Exception as retry_exc: # Catch MaxRetriesExceededError
+             logger.error(f"Celery task send_email_task failed after retries for {to_email}: {retry_exc}", exc_info=True)
+             raise # Re-raise the exception to mark the task as failed
+        raise # Re-raise the exception to mark the task as failed if not retrying (e.g. first attempt)
