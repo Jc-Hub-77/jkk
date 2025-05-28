@@ -4,8 +4,8 @@ import uuid
 import logging
 import random
 import string
-import smtplib # For email sending
-from email.mime.text import MIMEText # For email sending
+# import smtplib # For email sending - No longer directly used here
+# from email.mime.text import MIMEText # For email sending - No longer directly used here
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -15,6 +15,7 @@ from sqlalchemy import or_
 
 from backend.models import User, Profile, Referral # Adjusted to relative import
 from backend.config import settings # Adjusted to relative import
+from backend.tasks import send_email_task # Import the new Celery task
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -24,38 +25,38 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # --- Helper Functions ---
 
-def send_email_async(to_email: str, subject: str, body: str):
-    """
-    Sends an email using SMTP. This is a basic synchronous implementation.
-    For production, consider using a task queue and a dedicated email service.
-    """
-    if not settings.SMTP_HOST or not settings.SMTP_USER or not settings.SMTP_PASSWORD or not settings.EMAILS_FROM_EMAIL:
-        logger.warning(f"Email not sent to {to_email}: SMTP settings are not fully configured. Simulating email.")
-        logger.info(f"--- Simulated Email to {to_email} ---")
-        logger.info(f"Subject: {subject}")
-        logger.info(f"Body:\n{body}")
-        logger.info(f"--- End of Simulated Email ---")
-        return {"status": "warning_simulated", "message": "Email settings not configured; email simulated."}
-
-    try:
-        msg = MIMEText(body)
-        msg['Subject'] = subject
-        msg['From'] = settings.EMAILS_FROM_EMAIL
-        msg['To'] = to_email
-
-        smtp_port = settings.SMTP_PORT if settings.SMTP_PORT is not None else 587
-
-        with smtplib.SMTP(settings.SMTP_HOST, smtp_port) as server:
-            if settings.SMTP_TLS:
-                server.starttls()
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.sendmail(settings.EMAILS_FROM_EMAIL, to_email, msg.as_string())
-
-        logger.info(f"Successfully sent email to {to_email} with subject '{subject}'.")
-        return {"status": "success", "message": "Email sent successfully."}
-    except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {e}", exc_info=True)
-        return {"status": "error", "message": f"Failed to send email: {e}"}
+# def send_email_async(to_email: str, subject: str, body: str):
+#     """
+#     Sends an email using SMTP. This is a basic synchronous implementation.
+#     For production, consider using a task queue and a dedicated email service.
+#     """
+#     if not settings.SMTP_HOST or not settings.SMTP_USER or not settings.SMTP_PASSWORD or not settings.EMAILS_FROM_EMAIL:
+#         logger.warning(f"Email not sent to {to_email}: SMTP settings are not fully configured. Simulating email.")
+#         logger.info(f"--- Simulated Email to {to_email} ---")
+#         logger.info(f"Subject: {subject}")
+#         logger.info(f"Body:\n{body}")
+#         logger.info(f"--- End of Simulated Email ---")
+#         return {"status": "warning_simulated", "message": "Email settings not configured; email simulated."}
+# 
+#     try:
+#         msg = MIMEText(body)
+#         msg['Subject'] = subject
+#         msg['From'] = settings.EMAILS_FROM_EMAIL
+#         msg['To'] = to_email
+# 
+#         smtp_port = settings.SMTP_PORT if settings.SMTP_PORT is not None else 587
+# 
+#         with smtplib.SMTP(settings.SMTP_HOST, smtp_port) as server:
+#             if settings.SMTP_TLS:
+#                 server.starttls()
+#             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+#             server.sendmail(settings.EMAILS_FROM_EMAIL, to_email, msg.as_string())
+# 
+#         logger.info(f"Successfully sent email to {to_email} with subject '{subject}'.")
+#         return {"status": "success", "message": "Email sent successfully."}
+#     except Exception as e:
+#         logger.error(f"Failed to send email to {to_email}: {e}", exc_info=True)
+#         return {"status": "error", "message": f"Failed to send email: {e}"}
 
 def _generate_secure_token_data(expire_hours: int):
     token = str(uuid.uuid4())
@@ -170,9 +171,9 @@ def register_user(db_session: Session, email: str, username: str, password: str,
             f"This link will expire in {settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS} hours.\n\n"
             f"Thanks,\nThe {settings.PROJECT_NAME} Team"
         )
-        send_email_async(new_user.email, email_subject, email_body)
+        send_email_task.delay(new_user.email, email_subject, email_body)
         
-        logger.info(f"User {username} (ID: {new_user.id}) registered successfully. Verification email sent.")
+        logger.info(f"User {username} (ID: {new_user.id}) registered successfully. Verification email queued.")
         return {"status": "success", "message": "Registration successful. Please check your email for verification.", "user_id": new_user.id}
     except Exception as e:
         db_session.rollback()
@@ -282,7 +283,7 @@ def update_user_profile(db_session: Session, user_id: int, data_to_update: dict)
         verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
         email_subject = f"Verify your new email address for {settings.PROJECT_NAME}"
         email_body = f"Hi {user.username},\n\nPlease click the link to verify your new email address: {verification_link}"
-        send_email_async(user.email, email_subject, email_body)
+        send_email_task.delay(user.email, email_subject, email_body)
         
     if "full_name" in data_to_update and user.profile.full_name != data_to_update["full_name"]:
         user.profile.full_name = data_to_update["full_name"]
@@ -346,8 +347,8 @@ def forgot_password_request(db_session: Session, email: str):
             f"This link will expire in 1 hour. If you did not request this, please ignore this email.\n\n"
             f"Thanks,\nThe {settings.PROJECT_NAME} Team"
         )
-        send_email_async(user.email, email_subject, email_body)
-        logger.info(f"Password reset email sent to {user.email} for user {user.username} (ID: {user.id}).")
+        send_email_task.delay(user.email, email_subject, email_body)
+        logger.info(f"Password reset email queued for {user.email} for user {user.username} (ID: {user.id}).")
         return {"status": "success", "message": "If an account with this email exists, a password reset link has been sent."}
     except Exception as e:
         db_session.rollback()
@@ -411,8 +412,8 @@ def request_new_verification_email(db_session: Session, email: str):
             f"This link will expire in {settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS} hours.\n\n"
             f"Thanks,\nThe {settings.PROJECT_NAME} Team"
         )
-        send_email_async(user.email, email_subject, email_body)
-        logger.info(f"New verification email sent to {user.email} for user {user.username} (ID: {user.id}).")
+        send_email_task.delay(user.email, email_subject, email_body)
+        logger.info(f"New verification email queued for {user.email} for user {user.username} (ID: {user.id}).")
         return {"status": "success", "message": "New verification email sent. Please check your inbox."}
     except Exception as e:
         db_session.rollback()
