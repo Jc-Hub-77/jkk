@@ -36,7 +36,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.web
     container_name: trading_platform_web
-    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "alembic upgrade head && gunicorn -k uvicorn.workers.UvicornWorker -c /app/gunicorn_conf.py main:app"
     volumes:
       - ./backend:/app # Mount backend code for live reload in development
     ports:
@@ -58,13 +58,14 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - API_ENCRYPTION_KEY=${API_ENCRYPTION_KEY}
       # Add other necessary env vars from your .env.example
+      - GUNICORN_WORKERS=4
 
   worker:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
     container_name: trading_platform_worker
-    command: celery -A celery_app.celery_app worker -l info -P gevent
+    # command: celery -A celery_app.celery_app worker -l info -P gevent # Command is now in Dockerfile.worker
     volumes:
       - ./backend:/app # Mount backend code for live reload
     env_file:
@@ -80,6 +81,10 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - API_ENCRYPTION_KEY=${API_ENCRYPTION_KEY}
       # Add other necessary env vars
+      - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-8} # Default to 8 if not in .env
+    deploy:
+      mode: replicated
+      replicas: 2 # Default to 2 replicas for swarm mode
 
 volumes:
   postgres_data:

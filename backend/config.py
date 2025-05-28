@@ -76,5 +76,9 @@ if not settings.STRATEGIES_DIR:
 if settings.JWT_SECRET_KEY == "a_very_secure_default_secret_key_please_change_me" and os.getenv("ENVIRONMENT") == "production":
     raise ValueError("CRITICAL: JWT_SECRET_KEY must be set to a strong, unique secret in production!")
 
+# Ensure API_ENCRYPTION_KEY is set in a production environment
+if not settings.API_ENCRYPTION_KEY and os.getenv("ENVIRONMENT") == "production":
+    raise ValueError("CRITICAL: API_ENCRYPTION_KEY must be set in a production environment!")
+
 if not settings.DATABASE_URL:
     raise ValueError("DATABASE_URL not set. Please configure it in .env or environment variables.")

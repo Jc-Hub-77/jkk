@@ -30,4 +30,6 @@ COPY . /app
 # Ensure 'backend.celery_app.celery_app' correctly points to your Celery application instance
 # The -A option specifies the Celery app instance.
 # The -l info sets the logging level.
-CMD ["celery", "-A", "celery_app.celery_app", "worker", "-l", "info", "-P", "gevent"] # Using gevent for concurrency, adjust if needed
+# Using sh -c to allow environment variable substitution for concurrency.
+# exec is used to ensure Celery becomes the main process (PID 1) and handles signals correctly.
+CMD ["sh", "-c", "exec celery -A celery_app.celery_app worker -l info -P gevent --concurrency ${CELERY_CONCURRENCY:-4}"]
