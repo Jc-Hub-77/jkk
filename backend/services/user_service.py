@@ -9,7 +9,7 @@ import string
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from datetime import timedelta
+from datetime import timedelta # Explicitly ensure timedelta is imported
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
@@ -80,11 +80,12 @@ def _verify_password(plain_password: str, hashed_password: str) -> bool:
 # --- Token Creation ---
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
+    current_time = datetime.datetime.utcnow()
     if expires_delta:
-        expire = datetime.datetime.utcnow() + expires_delta
+        expire = current_time + expires_delta
     else:
-        expire = datetime.datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+        expire = current_time + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"iat": current_time, "exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
@@ -140,7 +141,8 @@ def register_user(db_session: Session, email: str, username: str, password: str,
         referred_by_user_id=referrer_user_id_to_store, created_at=datetime.datetime.utcnow(),
         email_verification_token=email_verification_token,
         email_verification_token_expires_at=email_verification_token_expires_at,
-        is_active=True # Users are active by default upon registration
+        is_active=True, # Users are active by default upon registration
+        last_password_change_at=datetime.datetime.utcnow() # Set initial password change time
     )
     # Profile is created via relationship back_populates if Profile model has user_id FK
     # If Profile must be explicitly created:
@@ -315,6 +317,7 @@ def change_password(db_session: Session, user_id: int, old_password: str, new_pa
         return {"status": "error", "message": "New password must be at least 8 characters."}
 
     user.password_hash = _get_password_hash(new_password)
+    user.last_password_change_at = datetime.datetime.utcnow()
     try:
         db_session.commit()
         logger.info(f"Password changed successfully for user {user.username} (ID: {user.id}).")
@@ -374,6 +377,7 @@ def reset_password_with_token(db_session: Session, token: str, new_password: str
         return {"status": "error", "message": "Password reset token has expired."}
 
     user.password_hash = _get_password_hash(new_password)
+    user.last_password_change_at = datetime.datetime.utcnow()
     user.password_reset_token = None # Invalidate token after use
     user.password_reset_token_expires_at = None
     user.email_verified = True # Resetting password often implies email ownership
