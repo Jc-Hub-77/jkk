@@ -1,7 +1,7 @@
 // frontend/js/backtesting.js
 console.log("backtesting.js loaded");
 
-const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // Ensure this is correct
+// const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // Ensure this is correct - This will now be set globally via HTML script tag
 
 document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
@@ -58,7 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!strategySelect) return;
         strategySelect.innerHTML = '<option value="">Loading strategies...</option>';
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/`, { // Corrected: Public strategies list
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/strategies/`, { // Corrected: Public strategies list
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (!response.ok) { if (response.status === 401) { window.location.href = 'login.html'; return; } throw new Error(`HTTP error! status: ${response.status}`);}
@@ -90,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         paramsContainer.innerHTML = '<p><em>Loading parameters...</em></p>';
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/${strategyId}`, { // Corrected: Public strategy detail
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/strategies/${strategyId}`, { // Corrected: Public strategy detail
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (!response.ok) { if (response.status === 401) { window.location.href = 'login.html'; return; } throw new Error(`HTTP error! status: ${response.status}`);}
@@ -176,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const formData = new FormData(backtestSetupForm);
             const customParameters = {};
             const strategyId = parseInt(formData.get('strategyId'), 10);
-            const strategyDetailsResponse = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/${strategyId}`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const strategyDetailsResponse = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/strategies/${strategyId}`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             const strategyDetailsData = await strategyDetailsResponse.json();
             const paramDefs = strategyDetailsData.details?.parameters_definition || {};
 
@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log("Running backtest with payload:", JSON.stringify(payload, null, 2));
             try {
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/backtests`, { // Corrected Endpoint
+                const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/backtests`, { // Corrected Endpoint
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                     body: JSON.stringify(payload)
@@ -253,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             resultsLoading.textContent = `Polling for results... (Attempt ${attempts}/${maxAttempts})`;
             try {
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/backtests/${backtestId}`, {
+                const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/backtests/${backtestId}`, {
                     headers: { 'Authorization': `Bearer ${authToken}` }
                 });
                 if (!response.ok) {

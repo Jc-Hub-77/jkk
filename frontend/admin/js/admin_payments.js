@@ -39,7 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/admin/transactions?${queryParams}`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/payment/admin/transactions?${queryParams}`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {
@@ -100,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleViewPayment(paymentId) {
         console.log(`Viewing details for payment ID: ${paymentId}`);
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/admin/transactions/${paymentId}`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/payment/admin/transactions/${paymentId}`, {
                  headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {

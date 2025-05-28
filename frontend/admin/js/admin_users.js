@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Add sorting params if HTML controls are added: &sort_by=...&sort_order=...
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/users?${queryParams}`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/users?${queryParams}`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (!response.ok) {
@@ -114,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!confirm(`Are you sure you want to ${makeAdmin ? 'grant admin rights to' : 'revoke admin rights from'} user ID ${userId}?`)) return;
         
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/users/set-admin-status`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/users/set-admin-status`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 body: JSON.stringify({ user_id: userId, make_admin: makeAdmin })
@@ -136,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!confirm(`Are you sure you want to ${setActive ? 'activate' : 'deactivate'} user ID ${userId}?`)) return;
         try {
             // Note: Backend uses 'make_admin' field in AdminSetAdminStatusRequest for the 'activate' boolean
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/users/toggle-active-status`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/users/toggle-active-status`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 body: JSON.stringify({ user_id: userId, make_admin: setActive }) 
@@ -161,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // For now, assuming it mirrors toggle-active-status's re-use of the schema.
         if (!confirm(`Are you sure you want to mark email as ${setEmailVerified ? 'VERIFIED' : 'NOT VERIFIED'} for user ID ${userId}?`)) return;
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/admin/users/toggle-email-verified`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/admin/users/toggle-email-verified`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 // Assuming backend reuses 'make_admin' field for the boolean value

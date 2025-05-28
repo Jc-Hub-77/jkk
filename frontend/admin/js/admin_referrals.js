@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/referral?${queryParams}`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/referral?${queryParams}`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {
@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!confirm(`Mark $${parsedAmount.toFixed(2)} as paid for referral ID ${referralId}?`)) return;
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/referral/${referralId}/mark-paid`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/referral/${referralId}/mark-paid`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 body: JSON.stringify({ amount_paid: parsedAmount, notes: notes || "" })

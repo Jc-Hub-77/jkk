@@ -1,7 +1,7 @@
 // frontend/js/exchanges.js
 console.log("exchanges.js loaded");
 
-const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // Ensure this is correct
+// const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // Ensure this is correct - This will now be set globally via HTML script tag
 
 document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
         exchangeNameSelect.innerHTML = '<option value="">Loading exchanges...</option>';
         
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchange/supported-exchanges`, { // Corrected Endpoint
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchange/supported-exchanges`, { // Corrected Endpoint
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
         connectedExchangesTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Fetching your connected exchanges...</td></tr>';
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchange/api-keys`, { // Corrected Endpoint
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchange/api-keys`, { // Corrected Endpoint
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (!response.ok) {
@@ -116,7 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log("Submitting new API key:", exchangeData);
             try {
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchange/api-keys`, { // Corrected Endpoint
+                const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchange/api-keys`, { // Corrected Endpoint
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
@@ -151,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         console.log(`Testing API Key ID: ${apiKeyId}`);
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchange/api-keys/${apiKeyId}/test-connectivity`, { // Corrected Endpoint
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchange/api-keys/${apiKeyId}/test-connectivity`, { // Corrected Endpoint
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });
@@ -177,7 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         console.log(`Removing API Key ID: ${apiKeyId}`);
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchange/api-keys/${apiKeyId}`, { // Corrected Endpoint
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchange/api-keys/${apiKeyId}`, { // Corrected Endpoint
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${authToken}` }
             });

@@ -1,7 +1,7 @@
 // frontend/js/strategies.js
 console.log("strategies.js loaded");
 
-const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000';
+// const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // This will now be set globally via HTML script tag
 
 document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Corrected API: GET /api/v1/strategies/ (Public endpoint)
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/`, { headers: { 'Authorization': `Bearer ${authToken}` } }); // Include auth token even for public? Backend might filter based on auth.
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/strategies/`, { headers: { 'Authorization': `Bearer ${authToken}` } }); // Include auth token even for public? Backend might filter based on auth.
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status, strategies: [...] } or just [...] based on backend schema
 
@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
         modalApiKeySelect.innerHTML = '<option value="">Loading API Keys...</option>';
         try {
             // Corrected API: GET /api/v1/exchanges/api-keys (Lists all user keys)
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/exchanges/api-keys`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/exchanges/api-keys`, { headers: { 'Authorization': `Bearer ${authToken}` } });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status: "success", keys: [...] }
 
@@ -108,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Corrected API: GET /api/v1/strategies/{strategy_db_id} (Public endpoint)
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/${strategyId}`, { headers: { 'Authorization': `Bearer ${authToken}` } }); // Include auth token
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/strategies/${strategyId}`, { headers: { 'Authorization': `Bearer ${authToken}` } }); // Include auth token
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json(); // Expects { status: "success", details: {...} }
 
@@ -210,7 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // --- Initiate Payment ---
             try {
-                const createChargeResponse = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payments/charges`, {
+                const createChargeResponse = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/payments/charges`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                     body: JSON.stringify({

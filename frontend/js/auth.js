@@ -1,7 +1,7 @@
 // frontend/js/auth.js
 console.log("auth.js loaded");
 
-const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000';
+// const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // This will now be set globally via HTML script tag
 
 document.addEventListener('DOMContentLoaded', () => {
     const registrationForm = document.getElementById('registrationForm');
@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("Registering:", registrationData);
             
             try {
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/auth/register`, {
+                const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/auth/register`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(registrationData)
@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("Logging in:", { username_or_email });
             
             try {
-                const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/auth/login`, {
+                const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, // Use form-urlencoded for OAuth2PasswordRequestForm
                     body: new URLSearchParams({ username: username_or_email, password: password }) // Use URLSearchParams for form data
@@ -108,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             try {
                 // Assuming admin login uses the same /api/v1/auth/login endpoint but checks for admin status in response
-                 const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/auth/login`, {
+                 const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: new URLSearchParams({ username: username, password: password })

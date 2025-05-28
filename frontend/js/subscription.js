@@ -1,7 +1,7 @@
 // frontend/js/subscription.js
 console.log("subscription.js loaded");
 
-const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000';
+// const BACKEND_API_BASE_URL = 'http://127.0.0.1:8000'; // This will now be set globally via HTML script tag
 
 document.addEventListener('DOMContentLoaded', () => {
     const authToken = localStorage.getItem('authToken');
@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!activeStrategySubsList) return;
         activeStrategySubsList.innerHTML = '<p>Loading your strategy subscriptions...</p>';
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/strategies/subscriptions/me`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/strategies/subscriptions/me`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {
@@ -90,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchPlatformSubscriptionDetails() {
         if (!platformPlanName && !platformPlanStatus && !platformPlanExpiry) return;
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/platform_subscription`, { 
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/user_data/users/${userId}/platform_subscription`, { 
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {
@@ -137,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!paymentHistoryTableBody) return;
         paymentHistoryTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading payment history...</td></tr>';
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/history/me?page=1&per_page=10`, { // Added default pagination
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/payment/history/me?page=1&per_page=10`, { // Added default pagination
                 headers: { 'Authorization': `Bearer ${authToken}` } 
             });
             if (!response.ok) {
@@ -182,11 +182,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        logger.info(`Initiating payment for ${itemType} ID ${itemId}: ${itemName}, Amount: $${amountUsd}`);
+        // console.info(`Initiating payment for ${itemType} ID ${itemId}: ${itemName}, Amount: $${amountUsd}`); // Changed from logger to console
+        console.log(`Initiating payment for ${itemType} ID ${itemId}: ${itemName}, Amount: $${amountUsd}`);
         button.disabled = true; button.textContent = "Processing...";
 
         try {
-            const response = await fetch(`${BACKEND_API_BASE_URL}/api/v1/payment/charges`, {
+            const response = await fetch(`${window.BACKEND_API_BASE_URL}/api/v1/payment/charges`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
                 body: JSON.stringify({ 
